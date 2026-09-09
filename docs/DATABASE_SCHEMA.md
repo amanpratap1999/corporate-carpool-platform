@@ -262,7 +262,8 @@ CREATE TYPE ride_request_status AS ENUM (
     'ACCEPTED',
     'REJECTED',
     'CANCELLED',
-    'EXPIRED'
+    'EXPIRED',
+    'COMPLETED'
 );
 
 CREATE TYPE waypoint_type AS ENUM (
