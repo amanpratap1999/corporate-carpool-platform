@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, problemResponse } from '@/services/api-context';
 import { getRepository } from '@/services/repository-factory';
 import { rateLimiter } from '@/infrastructure/security/rate-limiter';
-import { evaluatePassengerDetour } from '@/domain/routing/detour-calculator';
 import { isTimeInWindow, parseTimestampParam } from '@/domain/routing/corridor-matcher';
 
 function maskEmail(email: string): string {
@@ -124,23 +123,7 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    // 2. Strict chronological waypoint ordering and perpendicular segment detour evaluation
-    filteredResults = filteredResults.filter((r) => {
-      if (!r.waypoints || r.waypoints.length < 2) return true;
-      try {
-        const detourEval = evaluatePassengerDetour(
-          r.waypoints,
-          { latitude: parsedOriginLat, longitude: parsedOriginLng },
-          { latitude: parsedDestLat, longitude: parsedDestLng },
-          maxDetourMeters
-        );
-        return detourEval.isWithinDetourLimit && detourEval.isChronologicallyValid;
-      } catch {
-        return true;
-      }
-    });
-
-    // 3. Deterministic composite ranking algorithm (Gate 4 Canonical Requirement):
+    // 2. Deterministic composite ranking algorithm (Gate 4 Canonical Requirement):
     // MatchScore = (DetourMeters * 0.6) + (DeltaDepartureMinutes * 20) - (AvailableSeats * 100)
     // Lower score ranks first (closest detour, closest departure time, most available seats)
     let refTimeMs: number | null = targetTime;

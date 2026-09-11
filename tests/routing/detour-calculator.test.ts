@@ -135,6 +135,32 @@ describe('Authoritative Driver Route Invariants & Detour Calculator', () => {
       expect(driverRouteWaypoints[0].address_text).toBe(originalWaypointsSnapshot[0].address_text);
     });
 
+    it('handles numeric string coordinates gracefully without producing NaN or string concatenation', () => {
+      const stringWaypoints = [
+        {
+          stop_order: '0' as any,
+          latitude: '26.9124' as any,
+          longitude: '75.7873' as any,
+          address_text: 'Jaipur Origin',
+        },
+        {
+          stop_order: '1' as any,
+          latitude: '26.8500' as any,
+          longitude: '75.8000' as any,
+          address_text: 'Jaipur Destination',
+        },
+      ];
+      const pickup: Coordinate = { latitude: '26.9124' as any, longitude: '75.7873' as any };
+      const drop: Coordinate = { latitude: '26.8500' as any, longitude: '75.8000' as any };
+
+      const result = evaluatePassengerDetour(stringWaypoints, pickup, drop, 3000);
+      expect(result.isWithinDetourLimit).toBe(true);
+      expect(result.isChronologicallyValid).toBe(true);
+      expect(Number.isNaN(result.nearestPickupDistanceMeters)).toBe(false);
+      expect(Number.isFinite(result.nearestPickupDistanceMeters)).toBe(true);
+      expect(result.nearestPickupDistanceMeters).toBeLessThan(50);
+    });
+
     it('throws when driver route has fewer than 2 waypoints', () => {
       expect(() => {
         evaluatePassengerDetour(

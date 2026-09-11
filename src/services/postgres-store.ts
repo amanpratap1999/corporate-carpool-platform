@@ -63,6 +63,106 @@ function fromSqlDates<T extends Record<string, any>>(item: T): T {
   return result;
 }
 
+function normalizeUserLocation(row: any): UserLocation {
+  const item = fromSqlDates(row);
+  return {
+    ...item,
+    latitude: Number(item.latitude),
+    longitude: Number(item.longitude),
+  };
+}
+
+function normalizeVehicle(row: any): Vehicle {
+  const item = fromSqlDates(row);
+  return {
+    ...item,
+    year: Number(item.year),
+    total_seats: Number(item.total_seats),
+    max_passenger_capacity: item.max_passenger_capacity != null ? Number(item.max_passenger_capacity) : undefined,
+  };
+}
+
+function normalizeRide(row: any): Ride {
+  const item = fromSqlDates(row);
+  return {
+    ...item,
+    total_seats_offered: Number(item.total_seats_offered),
+    available_seats: Number(item.available_seats),
+    cost_per_seat_cents: item.cost_per_seat_cents != null ? Number(item.cost_per_seat_cents) : 0,
+    version: item.version != null ? Number(item.version) : 1,
+  };
+}
+
+function normalizeRideRoute(row: any): RideRoute {
+  const item = fromSqlDates(row);
+  const bbox = item.bounding_box || {};
+  return {
+    ...item,
+    origin_latitude: Number(item.origin_latitude),
+    origin_longitude: Number(item.origin_longitude),
+    destination_latitude: Number(item.destination_latitude),
+    destination_longitude: Number(item.destination_longitude),
+    total_distance_meters: Number(item.total_distance_meters),
+    total_duration_seconds: Number(item.total_duration_seconds),
+    min_latitude: Number(item.min_latitude),
+    max_latitude: Number(item.max_latitude),
+    min_longitude: Number(item.min_longitude),
+    max_longitude: Number(item.max_longitude),
+    bounding_box: {
+      min_lat: Number(bbox.min_lat ?? item.min_latitude),
+      max_lat: Number(bbox.max_lat ?? item.max_latitude),
+      min_lng: Number(bbox.min_lng ?? item.min_longitude),
+      max_lng: Number(bbox.max_lng ?? item.max_longitude),
+    },
+  };
+}
+
+function normalizeRouteWaypoint(row: any): RouteWaypoint {
+  const item = fromSqlDates(row);
+  return {
+    ...item,
+    stop_order: Number(item.stop_order),
+    latitude: Number(item.latitude),
+    longitude: Number(item.longitude),
+    estimated_arrival_offset_seconds: item.estimated_arrival_offset_seconds != null ? Number(item.estimated_arrival_offset_seconds) : 0,
+  };
+}
+
+function normalizePickupPoint(row: any): PickupPoint {
+  const item = fromSqlDates(row);
+  return {
+    ...item,
+    latitude: Number(item.latitude),
+    longitude: Number(item.longitude),
+  };
+}
+
+function normalizeDropPoint(row: any): DropPoint {
+  const item = fromSqlDates(row);
+  return {
+    ...item,
+    latitude: Number(item.latitude),
+    longitude: Number(item.longitude),
+  };
+}
+
+function normalizeRideRequest(row: any): RideRequest {
+  const item = fromSqlDates(row);
+  return {
+    ...item,
+    requested_seats: Number(item.requested_seats),
+    version: item.version != null ? Number(item.version) : 1,
+  };
+}
+
+function normalizeRidePassenger(row: any): RidePassenger {
+  const item = fromSqlDates(row);
+  return {
+    ...item,
+    seats_booked: Number(item.seats_booked),
+  };
+}
+
 export class PostgresStore {
   private static instance: PostgresStore;
 
@@ -77,14 +177,14 @@ export class PostgresStore {
     const db = getDb();
     if (!db) return undefined;
     const res = await db.select().from(schema.organizations).where(eq(schema.organizations.id, id)).limit(1);
-    return res[0] as unknown as Organization;
+    return res[0] ? fromSqlDates(res[0]) as unknown as Organization : undefined;
   }
 
   public async getAllOrganizations(): Promise<Organization[]> {
     const db = getDb();
     if (!db) return [];
     const res = await db.select().from(schema.organizations);
-    return res as unknown as Organization[];
+    return res.map((r: any) => fromSqlDates(r) as unknown as Organization);
   }
 
   public async setOrganization(item: Organization): Promise<void> {
@@ -100,14 +200,14 @@ export class PostgresStore {
     const db = getDb();
     if (!db) return undefined;
     const res = await db.select().from(schema.users).where(eq(schema.users.id, id)).limit(1);
-    return res[0] as unknown as User;
+    return res[0] ? fromSqlDates(res[0]) as unknown as User : undefined;
   }
 
   public async getAllUsers(): Promise<User[]> {
     const db = getDb();
     if (!db) return [];
     const res = await db.select().from(schema.users);
-    return res as unknown as User[];
+    return res.map((r: any) => fromSqlDates(r) as unknown as User);
   }
 
   public async setUser(item: User): Promise<void> {
@@ -123,14 +223,14 @@ export class PostgresStore {
     const db = getDb();
     if (!db) return undefined;
     const res = await db.select().from(schema.userCapabilities).where(eq(schema.userCapabilities.user_id, id)).limit(1);
-    return res[0] as unknown as UserCapability;
+    return res[0] ? fromSqlDates(res[0]) as unknown as UserCapability : undefined;
   }
 
   public async getAllUserCapabilitys(): Promise<UserCapability[]> {
     const db = getDb();
     if (!db) return [];
     const res = await db.select().from(schema.userCapabilities);
-    return res as unknown as UserCapability[];
+    return res.map((r: any) => fromSqlDates(r) as unknown as UserCapability);
   }
 
   public async setUserCapability(item: UserCapability): Promise<void> {
@@ -146,14 +246,14 @@ export class PostgresStore {
     const db = getDb();
     if (!db) return undefined;
     const res = await db.select().from(schema.userLocations).where(eq(schema.userLocations.id, id)).limit(1);
-    return res[0] as unknown as UserLocation;
+    return res[0] ? normalizeUserLocation(res[0]) : undefined;
   }
 
   public async getAllUserLocations(): Promise<UserLocation[]> {
     const db = getDb();
     if (!db) return [];
     const res = await db.select().from(schema.userLocations);
-    return res as unknown as UserLocation[];
+    return res.map(normalizeUserLocation);
   }
 
   public async setUserLocation(item: UserLocation): Promise<void> {
@@ -169,14 +269,14 @@ export class PostgresStore {
     const db = getDb();
     if (!db) return undefined;
     const res = await db.select().from(schema.vehicles).where(eq(schema.vehicles.id, id)).limit(1);
-    return res[0] as unknown as Vehicle;
+    return res[0] ? normalizeVehicle(res[0]) : undefined;
   }
 
   public async getAllVehicles(): Promise<Vehicle[]> {
     const db = getDb();
     if (!db) return [];
     const res = await db.select().from(schema.vehicles);
-    return res as unknown as Vehicle[];
+    return res.map(normalizeVehicle);
   }
 
   public async setVehicle(item: Vehicle): Promise<void> {
@@ -192,14 +292,14 @@ export class PostgresStore {
     const db = getDb();
     if (!db) return undefined;
     const res = await db.select().from(schema.rides).where(eq(schema.rides.id, id)).limit(1);
-    return res[0] as unknown as Ride;
+    return res[0] ? normalizeRide(res[0]) : undefined;
   }
 
   public async getAllRides(): Promise<Ride[]> {
     const db = getDb();
     if (!db) return [];
     const res = await db.select().from(schema.rides);
-    return res as unknown as Ride[];
+    return res.map(normalizeRide);
   }
 
   public async setRide(item: Ride): Promise<void> {
@@ -215,14 +315,14 @@ export class PostgresStore {
     const db = getDb();
     if (!db) return undefined;
     const res = await db.select().from(schema.rideRoutes).where(eq(schema.rideRoutes.id, id)).limit(1);
-    return res[0] as unknown as RideRoute;
+    return res[0] ? normalizeRideRoute(res[0]) : undefined;
   }
 
   public async getAllRideRoutes(): Promise<RideRoute[]> {
     const db = getDb();
     if (!db) return [];
     const res = await db.select().from(schema.rideRoutes);
-    return res as unknown as RideRoute[];
+    return res.map(normalizeRideRoute);
   }
 
   public async setRideRoute(item: RideRoute): Promise<void> {
@@ -238,14 +338,14 @@ export class PostgresStore {
     const db = getDb();
     if (!db) return undefined;
     const res = await db.select().from(schema.routeWaypoints).where(eq(schema.routeWaypoints.id, id)).limit(1);
-    return res[0] as unknown as RouteWaypoint;
+    return res[0] ? normalizeRouteWaypoint(res[0]) : undefined;
   }
 
   public async getAllRouteWaypoints(): Promise<RouteWaypoint[]> {
     const db = getDb();
     if (!db) return [];
     const res = await db.select().from(schema.routeWaypoints);
-    return res as unknown as RouteWaypoint[];
+    return res.map(normalizeRouteWaypoint);
   }
 
   public async setRouteWaypoint(item: RouteWaypoint): Promise<void> {
@@ -261,14 +361,14 @@ export class PostgresStore {
     const db = getDb();
     if (!db) return undefined;
     const res = await db.select().from(schema.pickupPoints).where(eq(schema.pickupPoints.id, id)).limit(1);
-    return res[0] as unknown as PickupPoint;
+    return res[0] ? normalizePickupPoint(res[0]) : undefined;
   }
 
   public async getAllPickupPoints(): Promise<PickupPoint[]> {
     const db = getDb();
     if (!db) return [];
     const res = await db.select().from(schema.pickupPoints);
-    return res as unknown as PickupPoint[];
+    return res.map(normalizePickupPoint);
   }
 
   public async setPickupPoint(item: PickupPoint): Promise<void> {
@@ -284,14 +384,14 @@ export class PostgresStore {
     const db = getDb();
     if (!db) return undefined;
     const res = await db.select().from(schema.dropPoints).where(eq(schema.dropPoints.id, id)).limit(1);
-    return res[0] as unknown as DropPoint;
+    return res[0] ? normalizeDropPoint(res[0]) : undefined;
   }
 
   public async getAllDropPoints(): Promise<DropPoint[]> {
     const db = getDb();
     if (!db) return [];
     const res = await db.select().from(schema.dropPoints);
-    return res as unknown as DropPoint[];
+    return res.map(normalizeDropPoint);
   }
 
   public async setDropPoint(item: DropPoint): Promise<void> {
@@ -307,14 +407,14 @@ export class PostgresStore {
     const db = getDb();
     if (!db) return undefined;
     const res = await db.select().from(schema.rideRequests).where(eq(schema.rideRequests.id, id)).limit(1);
-    return res[0] as unknown as RideRequest;
+    return res[0] ? normalizeRideRequest(res[0]) : undefined;
   }
 
   public async getAllRideRequests(): Promise<RideRequest[]> {
     const db = getDb();
     if (!db) return [];
     const res = await db.select().from(schema.rideRequests);
-    return res as unknown as RideRequest[];
+    return res.map(normalizeRideRequest);
   }
 
   public async setRideRequest(item: RideRequest): Promise<void> {
@@ -330,7 +430,7 @@ export class PostgresStore {
     const db = getDb();
     if (!db) return undefined;
     const res = await db.select().from(schema.ridePassengers).where(eq(schema.ridePassengers.id, id)).limit(1);
-    return res[0] as unknown as RidePassenger;
+    return res[0] ? normalizeRidePassenger(res[0]) : undefined;
   }
 
   public async deleteRidePassengerByRequestId(requestId: UUID): Promise<void> {
@@ -343,7 +443,7 @@ export class PostgresStore {
     const db = getDb();
     if (!db) return [];
     const res = await db.select().from(schema.ridePassengers);
-    return res as unknown as RidePassenger[];
+    return res.map(normalizeRidePassenger);
   }
 
   public async setRidePassenger(item: RidePassenger): Promise<void> {
@@ -571,7 +671,7 @@ export class PostgresStore {
         .where(eq(schema.rideRequests.id, requestId))
         .for('update');
       
-      const request = reqRows[0] as unknown as RideRequest;
+      const request = normalizeRideRequest(reqRows[0]);
       if (!request) throw new Error("Ride request not found.");
 
       // 2. Lock the associated ride
@@ -581,7 +681,7 @@ export class PostgresStore {
         .where(eq(schema.rides.id, request.ride_id))
         .for('update');
         
-      const ride = rideRows[0] as unknown as Ride;
+      const ride = normalizeRide(rideRows[0]);
       if (!ride) throw new Error("Associated ride not found.");
 
       // 3. Domain validation

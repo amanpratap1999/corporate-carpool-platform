@@ -37,11 +37,19 @@ export function calculateHaversineDistanceMeters(
   lat2: number,
   lon2: number
 ): number {
+  const nLat1 = Number(lat1);
+  const nLon1 = Number(lon1);
+  const nLat2 = Number(lat2);
+  const nLon2 = Number(lon2);
+  if (isNaN(nLat1) || isNaN(nLon1) || isNaN(nLat2) || isNaN(nLon2)) {
+    return Infinity;
+  }
+
   const R = 6371e3; // Earth radius in meters
-  const phi1 = (lat1 * Math.PI) / 180;
-  const phi2 = (lat2 * Math.PI) / 180;
-  const deltaPhi = ((lat2 - lat1) * Math.PI) / 180;
-  const deltaLambda = ((lon2 - lon1) * Math.PI) / 180;
+  const phi1 = (nLat1 * Math.PI) / 180;
+  const phi2 = (nLat2 * Math.PI) / 180;
+  const deltaPhi = ((nLat2 - nLat1) * Math.PI) / 180;
+  const deltaLambda = ((nLon2 - nLon1) * Math.PI) / 180;
 
   const a =
     Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
@@ -59,32 +67,33 @@ export function projectPointToSegment(
   a: Coordinate,
   b: Coordinate
 ): { distanceMeters: number; t: number } {
-  const dAB = calculateHaversineDistanceMeters(a.latitude, a.longitude, b.latitude, b.longitude);
+  const xA = Number(a.longitude);
+  const yA = Number(a.latitude);
+  const xB = Number(b.longitude);
+  const yB = Number(b.latitude);
+  const xP = Number(p.longitude);
+  const yP = Number(p.latitude);
+
+  const dAB = calculateHaversineDistanceMeters(yA, xA, yB, xB);
   if (dAB === 0) {
     return {
-      distanceMeters: calculateHaversineDistanceMeters(p.latitude, p.longitude, a.latitude, a.longitude),
+      distanceMeters: calculateHaversineDistanceMeters(yP, xP, yA, xA),
       t: 0,
     };
   }
 
   // Vector projection in flat space approximation for short corridor segments
-  const xA = a.longitude;
-  const yA = a.latitude;
-  const xB = b.longitude;
-  const yB = b.latitude;
-  const xP = p.longitude;
-  const yP = p.latitude;
-
   const dx = xB - xA;
   const dy = yB - yA;
+  const denom = dx * dx + dy * dy;
 
-  let t = ((xP - xA) * dx + (yP - yA) * dy) / (dx * dx + dy * dy);
+  let t = denom > 0 ? ((xP - xA) * dx + (yP - yA) * dy) / denom : 0;
   t = Math.max(0, Math.min(1, t));
 
   const projLat = yA + t * dy;
   const projLng = xA + t * dx;
 
-  const distanceMeters = calculateHaversineDistanceMeters(p.latitude, p.longitude, projLat, projLng);
+  const distanceMeters = calculateHaversineDistanceMeters(yP, xP, projLat, projLng);
   return { distanceMeters, t };
 }
 
@@ -117,7 +126,23 @@ export function evaluatePassengerDetour(
     throw new Error('Driver route must contain at least 2 waypoints (origin and destination).');
   }
 
-  const sortedWaypoints = [...driverWaypoints].sort((a, b) => a.stop_order - b.stop_order);
+  const pPickup: Coordinate = {
+    latitude: Number(passengerPickup.latitude),
+    longitude: Number(passengerPickup.longitude),
+  };
+  const pDrop: Coordinate = {
+    latitude: Number(passengerDrop.latitude),
+    longitude: Number(passengerDrop.longitude),
+  };
+
+  const sortedWaypoints = [...driverWaypoints]
+    .map((wp) => ({
+      ...wp,
+      latitude: Number(wp.latitude),
+      longitude: Number(wp.longitude),
+      stop_order: Number(wp.stop_order),
+    }))
+    .sort((a, b) => a.stop_order - b.stop_order);
 
   let minPickupDistance = Infinity;
   let pickupRouteProgress = 0;
@@ -132,14 +157,14 @@ export function evaluatePassengerDetour(
     const wpA = sortedWaypoints[i];
     const wpB = sortedWaypoints[i + 1];
 
-    const pickupProj = projectPointToSegment(passengerPickup, wpA, wpB);
+    const pickupProj = projectPointToSegment(pPickup, wpA, wpB);
     if (pickupProj.distanceMeters < minPickupDistance) {
       minPickupDistance = pickupProj.distanceMeters;
       pickupRouteProgress = i + pickupProj.t;
       nearestPickupStopOrder = pickupProj.t < 0.5 ? wpA.stop_order : wpB.stop_order;
     }
 
-    const dropProj = projectPointToSegment(passengerDrop, wpA, wpB);
+    const dropProj = projectPointToSegment(pDrop, wpA, wpB);
     if (dropProj.distanceMeters < minDropDistance) {
       minDropDistance = dropProj.distanceMeters;
       dropRouteProgress = i + dropProj.t;
