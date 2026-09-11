@@ -3,7 +3,7 @@
  * Matches Acme Global corporate tenant setup
  */
 
-import { DataStore } from './data-store';
+import { PostgresStore } from './postgres-store';
 import {
   Organization,
   User,
@@ -19,9 +19,10 @@ import {
   RidePassenger,
 } from '../domain/types';
 
-export function initializeSeedData(): DataStore {
-  const store = DataStore.getInstance();
-  if (store.organizations.size > 0) return store; // Already seeded
+export async function initializeSeedData(): Promise<PostgresStore> {
+  const store = PostgresStore.getInstance();
+  const orgs = await store.getAllOrganizations();
+  if (orgs.length > 0) return store; // Already seeded
 
   const orgId = '11111111-1111-4111-8111-111111111111';
 
@@ -39,7 +40,7 @@ export function initializeSeedData(): DataStore {
     created_at: '2026-08-01T00:00:00Z',
     updated_at: '2026-08-01T00:00:00Z',
   };
-  store.organizations.set(org.id, org);
+  await store.setOrganization(org);
 
   // 2. Users
   const alexId = '22222222-2222-4222-8222-222222222222';
@@ -111,7 +112,7 @@ export function initializeSeedData(): DataStore {
     },
   ];
 
-  users.forEach((u) => store.users.set(u.id, u));
+  for (const u of users) await store.setUser(u);
 
   // 3. User Capabilities
   const capabilities: UserCapability[] = [
@@ -168,7 +169,7 @@ export function initializeSeedData(): DataStore {
       updated_at: '2026-08-01T08:00:00Z',
     },
   ];
-  capabilities.forEach((c) => store.userCapabilities.set(c.user_id, c));
+  for (const c of capabilities) await store.setUserCapability(c);
 
   // 4. Saved Locations
   const locations: UserLocation[] = [
@@ -225,7 +226,7 @@ export function initializeSeedData(): DataStore {
       updated_at: '2026-08-10T10:00:00Z',
     },
   ];
-  locations.forEach((l) => store.userLocations.set(l.id, l));
+  for (const l of locations) await store.setUserLocation(l);
 
   // 5. Vehicles
   const alexVehId = '77777777-7777-4777-8777-777777777777';
@@ -263,7 +264,7 @@ export function initializeSeedData(): DataStore {
       updated_at: '2026-08-13T14:00:00Z',
     },
   ];
-  vehicles.forEach((v) => store.vehicles.set(v.id, v));
+  for (const v of vehicles) await store.setVehicle(v);
 
   // 6. Ride 1: Alex's Inbound Commute
   const ride1Id = '99999999-9999-4999-8999-999999999999';
@@ -291,7 +292,7 @@ export function initializeSeedData(): DataStore {
     created_at: '2026-09-09T08:00:00Z',
     updated_at: '2026-09-09T09:30:00Z',
   };
-  store.rides.set(ride1.id, ride1);
+  await store.setRide(ride1);
 
   // Route 1
   const route1Id = crypto.randomUUID();
@@ -320,7 +321,7 @@ export function initializeSeedData(): DataStore {
     created_at: '2026-09-09T08:00:00Z',
     updated_at: '2026-09-09T08:00:00Z',
   };
-  store.rideRoutes.set(route1.id, route1);
+  await store.setRideRoute(route1);
 
   // Route 1 Waypoints
   const waypoints1: RouteWaypoint[] = [
@@ -373,12 +374,12 @@ export function initializeSeedData(): DataStore {
       created_at: '2026-09-09T08:00:00Z',
     },
   ];
-  waypoints1.forEach((w) => store.routeWaypoints.set(w.id, w));
+  for (const w of waypoints1) await store.setRouteWaypoint(w);
 
   // Request 1: David Kim (ACCEPTED)
   const davidPickupId = crypto.randomUUID();
   const davidDropId = crypto.randomUUID();
-  store.pickupPoints.set(davidPickupId, {
+  await store.setPickupPoint({
     id: davidPickupId,
     organization_id: orgId,
     passenger_id: davidId,
@@ -388,7 +389,7 @@ export function initializeSeedData(): DataStore {
     landmark_note: 'Waiting near the taxi turnaround',
     created_at: '2026-09-09T09:00:00Z',
   });
-  store.dropPoints.set(davidDropId, {
+  await store.setDropPoint({
     id: davidDropId,
     organization_id: orgId,
     passenger_id: davidId,
@@ -415,7 +416,7 @@ export function initializeSeedData(): DataStore {
     created_at: '2026-09-09T09:00:00Z',
     updated_at: '2026-09-09T09:30:00Z',
   };
-  store.rideRequests.set(davidReq.id, davidReq);
+  await store.setRideRequest(davidReq);
 
   // Manifest entry
   const manifest1: RidePassenger = {
@@ -427,12 +428,12 @@ export function initializeSeedData(): DataStore {
     seats_booked: 1,
     created_at: '2026-09-09T09:30:00Z',
   };
-  store.ridePassengers.set(manifest1.id, manifest1);
+  await store.setRidePassenger(manifest1);
 
   // Request 2: Emily Watson (PENDING)
   const emilyPickupId = crypto.randomUUID();
   const emilyDropId = crypto.randomUUID();
-  store.pickupPoints.set(emilyPickupId, {
+  await store.setPickupPoint({
     id: emilyPickupId,
     organization_id: orgId,
     passenger_id: emilyId,
@@ -442,7 +443,7 @@ export function initializeSeedData(): DataStore {
     landmark_note: 'In front of Starbucks',
     created_at: '2026-09-09T10:15:00Z',
   });
-  store.dropPoints.set(emilyDropId, {
+  await store.setDropPoint({
     id: emilyDropId,
     organization_id: orgId,
     passenger_id: emilyId,
@@ -467,10 +468,10 @@ export function initializeSeedData(): DataStore {
     created_at: '2026-09-09T10:15:00Z',
     updated_at: '2026-09-09T10:15:00Z',
   };
-  store.rideRequests.set(emilyReq.id, emilyReq);
+  await store.setRideRequest(emilyReq);
 
   // Initial Notifications
-  store.dispatchNotification(
+  await store.dispatchNotification(
     orgId,
     alexId,
     'RIDE_REQUESTED',
@@ -479,7 +480,7 @@ export function initializeSeedData(): DataStore {
     { ride_id: ride1Id, request_id: emilyReqId }
   );
 
-  store.dispatchNotification(
+  await store.dispatchNotification(
     orgId,
     davidId,
     'REQUEST_ACCEPTED',
@@ -489,15 +490,15 @@ export function initializeSeedData(): DataStore {
   );
 
   // Initial Audit Logs
-  store.logAudit(orgId, alexId, 'RIDE', ride1Id, 'CREATE', undefined, 'SCHEDULED', {
+  await store.logAudit(orgId, alexId, 'RIDE', ride1Id, 'CREATE', undefined, 'SCHEDULED', {
     departure_time: depTime1,
     total_seats: 3,
   });
-  store.logAudit(orgId, davidId, 'RIDE_REQUEST', davidReqId, 'CREATE', undefined, 'PENDING');
-  store.logAudit(orgId, alexId, 'RIDE_REQUEST', davidReqId, 'STATE_TRANSITION', 'PENDING', 'ACCEPTED', {
-    seats_allocated: 1,
+  await store.logAudit(orgId, davidId, 'RIDE_REQUEST', davidReqId, 'CREATE', undefined, 'PENDING');
+  await store.logAudit(orgId, alexId, 'RIDE_REQUEST', davidReqId, 'STATE_TRANSITION', 'PENDING', 'ACCEPTED', {
+    seats_booked: 1,
   });
-  store.logAudit(orgId, emilyId, 'RIDE_REQUEST', emilyReqId, 'CREATE', undefined, 'PENDING');
+  await store.logAudit(orgId, emilyId, 'RIDE_REQUEST', emilyReqId, 'CREATE', undefined, 'PENDING');
 
   return store;
 }

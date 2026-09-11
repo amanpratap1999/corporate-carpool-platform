@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_ride_requests_active_passenger" ON "ride_requests" USING btree ("ride_id","passenger_id") WHERE "ride_requests"."status" IN ('PENDING', 'ACCEPTED');

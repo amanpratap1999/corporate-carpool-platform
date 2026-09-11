@@ -1,0 +1,91 @@
+version: '3.8'
+
+# Corporate Carpooling Platform — Docker Compose
+#
+# Usage:
+#   1. cp .env.example .env
+#   2. Edit .env with real secrets
+#   3. docker compose up --build
+#
+# Services: postgres → migrate → web + worker
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-carpool}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-carpool_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-carpool} -d ${POSTGRES_DB:-carpool_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    command: node scripts/db-migrate.mjs
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-carpool}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-carpool_db}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - APP_ENV=staging
+      - STORAGE_MODE=postgres
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-carpool}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-carpool_db}
+      - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env}
+      - CRON_SECRET=${CRON_SECRET:?Set CRON_SECRET in .env}
+      - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY:-}
+      - NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=${NEXT_PUBLIC_GOOGLE_MAPS_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/v1/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  worker:
+    image: curlimages/curl:latest
+    depends_on:
+      web:
+        condition: service_healthy
+    environment:
+      - CRON_SECRET=${CRON_SECRET}
+    entrypoint: >
+      /bin/sh -c "
+        while true; do
+          sleep 300;
+          curl -sf -X POST http://web:3000/api/v1/system/cron/expire
+               -H \"Authorization: Bearer $$CRON_SECRET\"
+               -H 'Content-Type: application/json' || echo 'Cron cycle failed';
+        done
+      "
+    restart: unless-stopped
+
+volumes:
+  pgdata:

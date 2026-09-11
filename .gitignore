@@ -5,5 +5,9 @@ build
 dist
 .DS_Store
 *.log
-.env.local
-.env.*.local
+.env
+.env.*
+!.env.example
+.data
+data/
+*.tsbuildinfo

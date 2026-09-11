@@ -14,6 +14,7 @@ declare module 'lucide-react' {
   export const Clock: LucideIcon;
   export const Users: LucideIcon;
   export const Search: LucideIcon;
+  export const Check: LucideIcon;
   export const CheckCircle: LucideIcon;
   export const CheckCircle2: LucideIcon;
   export const XCircle: LucideIcon;

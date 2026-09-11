@@ -1,19 +1,50 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getRequestContext, problemResponse } from '@/services/api-context';
-import { initializeSeedData } from '@/services/seed-data';
+import { requireAuth, problemResponse } from '@/services/api-context';
+import { getRepository } from '@/services/repository-factory';
 import { PickupPoint, DropPoint, RideRequest } from '@/domain/types';
+import { rateLimiter } from '@/infrastructure/security/rate-limiter';
 
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const store = initializeSeedData();
-  const ctx = getRequestContext(req);
+  const auth = await requireAuth(req);
+  if (!auth.success) {
+    return auth.response;
+  }
+  const ctx = auth.ctx;
   const { id: rideId } = await params;
 
+  // Rate limiting: 10 booking creations per minute per user
+  const bookingLimit = rateLimiter.check(`booking:${ctx.user.id}`, 10, 60);
+  if (!bookingLimit.allowed) {
+    return problemResponse(
+      429,
+      'Too Many Requests',
+      `Booking request rate limit exceeded. Retry in ${bookingLimit.resetSeconds}s`,
+      'ERR_RATE_LIMIT_EXCEEDED',
+      req.nextUrl.pathname,
+      { 'Retry-After': String(bookingLimit.resetSeconds) }
+    );
+  }
+
+  // Rider capability check
+  if (!ctx.capabilities.can_ride) {
+    return problemResponse(
+      403,
+      'Rider Capability Required',
+      'User does not have rider authorization to request seats.',
+      'ERR_RIDER_CAPABILITY_REQUIRED',
+      `/api/v1/rides/${rideId}/requests`
+    );
+  }
+
+  const store = getRepository();
+
   try {
-    const ride = store.rides.get(rideId);
-    if (!ride) {
+    const ride = await store.getRide(rideId);
+    // Cross-tenant IDOR protection: return 404 if not found in caller's tenant
+    if (!ride || ride.organization_id !== ctx.org.id) {
       return problemResponse(404, 'Ride Not Found', 'The requested ride does not exist.', 'NOT_FOUND', `/api/v1/rides/${rideId}/requests`);
     }
 
@@ -26,7 +57,7 @@ export async function POST(
     }
 
     // Check duplicate active request
-    const existingActive = Array.from(store.rideRequests.values()).find(
+    const existingActive = (await store.getAllRideRequests()).find(
       (r) => r.ride_id === rideId && r.passenger_id === ctx.user.id && (r.status === 'PENDING' || r.status === 'ACCEPTED')
     );
     if (existingActive) {
@@ -62,7 +93,7 @@ export async function POST(
       landmark_note: pickup_point.landmark_note,
       created_at: new Date().toISOString(),
     };
-    store.pickupPoints.set(pickup.id, pickup);
+    await store.setPickupPoint(pickup);
 
     // 2. Create DropPoint entity
     const dropId = crypto.randomUUID();
@@ -76,7 +107,7 @@ export async function POST(
       landmark_note: drop_point.landmark_note,
       created_at: new Date().toISOString(),
     };
-    store.dropPoints.set(drop.id, drop);
+    await store.setDropPoint(drop);
 
     // 3. Create RideRequest entity
     const requestId = crypto.randomUUID();
@@ -94,7 +125,7 @@ export async function POST(
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
-    store.rideRequests.set(request.id, request);
+    await store.setRideRequest(request);
 
     // 4. Log audit trail
     store.logAudit(ctx.org.id, ctx.user.id, 'RIDE_REQUEST', request.id, 'CREATE', undefined, 'PENDING', {

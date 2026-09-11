@@ -13,6 +13,8 @@ export type UserStatus = 'ACTIVE' | 'INACTIVE' | 'SUSPENDED' | 'PENDING_VERIFICA
 
 export type VehicleStatus = 'ACTIVE' | 'INACTIVE' | 'PENDING_INSPECTION';
 
+export type VehicleType = 'CAR' | 'MOTORCYCLE' | 'VAN';
+
 export type RideStatus = 'DRAFT' | 'SCHEDULED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
 
 export type RideRequestStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'CANCELLED' | 'EXPIRED' | 'COMPLETED';
@@ -27,7 +29,8 @@ export type NotificationType =
   | 'RIDE_CANCELLED'
   | 'RIDE_STARTED'
   | 'RIDE_COMPLETED'
-  | 'SYSTEM_ANNOUNCEMENT';
+  | 'SYSTEM_ANNOUNCEMENT'
+  | 'USER_JOINED';
 
 export type NotificationChannel = 'IN_APP' | 'EMAIL' | 'SMS' | 'PUSH';
 
@@ -58,6 +61,11 @@ export interface User {
   status: UserStatus;
   work_department?: string;
   work_location?: string;
+  // Auth fields — never returned to clients; stripped in API responses
+  password_hash?: string;
+  external_idp_sub?: string;
+  invitation_token?: string;
+  invitation_token_expires_at?: string;
   created_at: string;
   updated_at: string;
 }
@@ -99,6 +107,8 @@ export interface Vehicle {
   color: string;
   license_plate: string;
   total_seats: number;
+  vehicle_type?: VehicleType;
+  max_passenger_capacity?: number;
   status: VehicleStatus;
   verified_at?: string;
   created_at: string;
@@ -151,7 +161,8 @@ export interface RideRoute {
   min_longitude: number;
   max_longitude: number;
   bounding_box: BoundingBox;
-  overview_polyline?: string;
+  encoded_polyline?: string;
+  google_route_id?: string;
   created_at: string;
   updated_at: string;
 }
@@ -249,4 +260,102 @@ export interface AuditLog {
   ip_address?: string;
   user_agent?: string;
   created_at: string;
+}
+
+export interface LatLngPoint {
+  lat: number;
+  lng: number;
+  address?: string;
+  place_id?: string;
+  stop_order?: number;
+}
+
+export interface RoutePreferences {
+  avoid_tolls?: boolean;
+  avoid_highways?: boolean;
+  avoid_ferries?: boolean;
+  routing_preference?: 'FASTER' | 'SHORTER';
+}
+
+export interface DirectionsRequestBody {
+  origin?: LatLngPoint;
+  destination?: LatLngPoint;
+  waypoints?: LatLngPoint[];
+  alternatives?: boolean;
+  preferences?: RoutePreferences;
+}
+
+export interface DirectionsRouteOption {
+  route_id: string;
+  summary: string;
+  distance: number;
+  total_distance_meters: number;
+  duration: number;
+  total_duration_seconds: number;
+  formatted_distance: string;
+  formatted_duration: string;
+  duration_in_traffic?: number;
+  formatted_traffic_duration?: string;
+  encoded_polyline?: string;
+  path?: Array<{ lat: number; lng: number }>;
+  is_recommended: boolean;
+  warnings: string[];
+  toll_metadata: {
+    has_tolls: boolean;
+    toll_details?: string;
+  };
+  has_ferries: boolean;
+  has_highways: boolean;
+  has_restricted_roads: boolean;
+  major_road_names: string[];
+  leg_details: Array<{
+    distance_meters: number;
+    duration_seconds: number;
+    start_address: string;
+    end_address: string;
+  }>;
+  waypoints: Array<{
+    stop_order: number;
+    point_type: 'ORIGIN' | 'CORRIDOR' | 'DESTINATION';
+    address_text: string;
+    latitude: number;
+    longitude: number;
+    place_id?: string;
+    estimated_arrival_offset_seconds: number;
+  }>;
+}
+
+export function decodePolyline(str: string): Array<{ lat: number; lng: number }> {
+  let index = 0;
+  const len = str.length;
+  let lat = 0;
+  let lng = 0;
+  const coordinates: Array<{ lat: number; lng: number }> = [];
+
+  while (index < len) {
+    let b: number;
+    let shift = 0;
+    let result = 0;
+    do {
+      b = str.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    const dlat = (result & 1) !== 0 ? ~(result >> 1) : result >> 1;
+    lat += dlat;
+
+    shift = 0;
+    result = 0;
+    do {
+      b = str.charCodeAt(index++) - 63;
+      result |= (b & 0x1f) << shift;
+      shift += 5;
+    } while (b >= 0x20);
+    const dlng = (result & 1) !== 0 ? ~(result >> 1) : result >> 1;
+    lng += dlng;
+
+    coordinates.push({ lat: lat / 1e5, lng: lng / 1e5 });
+  }
+
+  return coordinates;
 }

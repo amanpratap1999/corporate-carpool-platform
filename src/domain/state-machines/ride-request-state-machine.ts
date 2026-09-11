@@ -157,4 +157,18 @@ export class RideRequestStateMachine {
       updated_at: new Date().toISOString(),
     };
   }
+
+  /**
+   * Pending request expires automatically when departure time passes without confirmation.
+   */
+  public static expire(request: RideRequest): RideRequest {
+    this.assertCanTransition(request.status, 'EXPIRED');
+
+    return {
+      ...request,
+      status: 'EXPIRED',
+      version: request.version + 1,
+      updated_at: new Date().toISOString(),
+    };
+  }
 }

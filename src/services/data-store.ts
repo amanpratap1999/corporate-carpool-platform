@@ -1,6 +1,9 @@
+import { calculateHaversineDistanceMeters } from '../domain/geo';
+import { isSameServiceDate, isRideOnServiceDate, matchCorridor, SearchDiagnostics } from '../domain/routing/corridor-matcher';
 /**
  * Corporate Carpooling Platform: In-Memory Data Store & Spatial Services
- * Implements the 13 canonical tables and transactional operations defined in docs/DATABASE_SCHEMA.md
+ * Implements the 14 canonical tables and transactional operations defined in docs/DATABASE_SCHEMA.md
+ * Used as a fast in-memory test double; production code must use PostgresStore via getRepository().
  */
 
 import {
@@ -22,31 +25,12 @@ import {
 } from '../domain/types';
 import { RideStateMachine } from '../domain/state-machines/ride-state-machine';
 import { RideRequestStateMachine } from '../domain/state-machines/ride-request-state-machine';
+import { IDataRepository, CorridorSearchResult, ActivationError } from './repository.interface';
+import crypto from 'node:crypto';
 
-// ----------------------------------------------------------------------------
-// Spatial Math: Haversine Formula for Distance in Meters
-// ----------------------------------------------------------------------------
-export function calculateHaversineDistanceMeters(
-  lat1: number,
-  lon1: number,
-  lat2: number,
-  lon2: number
-): number {
-  const R = 6371e3; // Earth radius in meters
-  const φ1 = (lat1 * Math.PI) / 180;
-  const φ2 = (lat2 * Math.PI) / 180;
-  const Δφ = ((lat2 - lat1) * Math.PI) / 180;
-  const Δλ = ((lon2 - lon1) * Math.PI) / 180;
 
-  const a =
-    Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
-  return Math.round(R * c);
-}
-
-export class DataStore {
+export class DataStore implements IDataRepository {
   public organizations: Map<UUID, Organization> = new Map();
   public users: Map<UUID, User> = new Map();
   public userCapabilities: Map<UUID, UserCapability> = new Map();
@@ -63,6 +47,7 @@ export class DataStore {
   public auditLogs: AuditLog[] = [];
 
   private static instance: DataStore;
+  private locks: Map<string, Promise<void>> = new Map();
 
   public static getInstance(): DataStore {
     if (!DataStore.instance) {
@@ -71,10 +56,86 @@ export class DataStore {
     return DataStore.instance;
   }
 
+  public async acquireLock(key: string): Promise<() => void> {
+    while (this.locks.has(key)) {
+      await this.locks.get(key);
+    }
+    let resolveLock!: () => void;
+    const lockPromise = new Promise<void>((resolve) => {
+      resolveLock = resolve;
+    });
+    this.locks.set(key, lockPromise);
+
+    return () => {
+      this.locks.delete(key);
+      resolveLock();
+    };
+  }
+
   // --------------------------------------------------------------------------
-  // Audit Logging Helper
+  // IDataRepository — Simple async Map wrappers
   // --------------------------------------------------------------------------
-  public logAudit(
+
+  async getOrganization(id: UUID): Promise<Organization | undefined> { return this.organizations.get(id); }
+  async getAllOrganizations(): Promise<Organization[]> { return Array.from(this.organizations.values()); }
+  async setOrganization(item: Organization): Promise<void> { this.organizations.set(item.id, item); }
+
+  async getUser(id: UUID): Promise<User | undefined> { return this.users.get(id); }
+  async getAllUsers(): Promise<User[]> { return Array.from(this.users.values()); }
+  async setUser(item: User): Promise<void> { this.users.set(item.id, item); }
+
+  async getUserCapability(userId: UUID): Promise<UserCapability | undefined> { return this.userCapabilities.get(userId); }
+  async setUserCapability(item: UserCapability): Promise<void> { this.userCapabilities.set(item.user_id, item); }
+
+  async getAllUserLocations(): Promise<UserLocation[]> { return Array.from(this.userLocations.values()); }
+  async setUserLocation(item: UserLocation): Promise<void> { this.userLocations.set(item.id, item); }
+
+  async getVehicle(id: UUID): Promise<Vehicle | undefined> { return this.vehicles.get(id); }
+  async getAllVehicles(): Promise<Vehicle[]> { return Array.from(this.vehicles.values()); }
+  async setVehicle(item: Vehicle): Promise<void> { this.vehicles.set(item.id, item); }
+
+  async getRide(id: UUID): Promise<Ride | undefined> { return this.rides.get(id); }
+  async getAllRides(): Promise<Ride[]> { return Array.from(this.rides.values()); }
+  async setRide(item: Ride): Promise<void> { this.rides.set(item.id, item); }
+
+  async getRideRoute(id: UUID): Promise<RideRoute | undefined> { return this.rideRoutes.get(id); }
+  async getAllRideRoutes(): Promise<RideRoute[]> { return Array.from(this.rideRoutes.values()); }
+  async setRideRoute(item: RideRoute): Promise<void> { this.rideRoutes.set(item.id, item); }
+
+  async getAllRouteWaypoints(): Promise<RouteWaypoint[]> { return Array.from(this.routeWaypoints.values()); }
+  async setRouteWaypoint(item: RouteWaypoint): Promise<void> { this.routeWaypoints.set(item.id, item); }
+
+  async getPickupPoint(id: UUID): Promise<PickupPoint | undefined> { return this.pickupPoints.get(id); }
+  async getAllPickupPoints(): Promise<PickupPoint[]> { return Array.from(this.pickupPoints.values()); }
+  async setPickupPoint(item: PickupPoint): Promise<void> { this.pickupPoints.set(item.id, item); }
+
+  async getDropPoint(id: UUID): Promise<DropPoint | undefined> { return this.dropPoints.get(id); }
+  async getAllDropPoints(): Promise<DropPoint[]> { return Array.from(this.dropPoints.values()); }
+  async setDropPoint(item: DropPoint): Promise<void> { this.dropPoints.set(item.id, item); }
+
+  async getRideRequest(id: UUID): Promise<RideRequest | undefined> { return this.rideRequests.get(id); }
+  async getAllRideRequests(): Promise<RideRequest[]> { return Array.from(this.rideRequests.values()); }
+  async setRideRequest(item: RideRequest): Promise<void> { this.rideRequests.set(item.id, item); }
+
+  async getAllRidePassengers(): Promise<RidePassenger[]> { return Array.from(this.ridePassengers.values()); }
+  async setRidePassenger(item: RidePassenger): Promise<void> { this.ridePassengers.set(item.id, item); }
+  async deleteRidePassengerByRequestId(requestId: UUID): Promise<void> {
+    for (const [key, p] of this.ridePassengers.entries()) {
+      if (p.ride_request_id === requestId) { this.ridePassengers.delete(key); }
+    }
+  }
+
+  async getNotification(id: UUID): Promise<Notification | undefined> { return this.notifications.get(id); }
+  async getAllNotifications(): Promise<Notification[]> { return Array.from(this.notifications.values()); }
+  async setNotification(item: Notification): Promise<void> { this.notifications.set(item.id, item); }
+
+  async getAllAuditLogs(): Promise<AuditLog[]> { return [...this.auditLogs]; }
+  async appendAuditLog(item: AuditLog): Promise<void> { this.auditLogs.unshift(item); }
+
+  // --------------------------------------------------------------------------
+  // Audit & Notification helpers (async — satisfies IDataRepository)
+  // --------------------------------------------------------------------------
+  public async logAudit(
     orgId: UUID,
     actorId: UUID | undefined,
     entityType: string,
@@ -83,7 +144,7 @@ export class DataStore {
     fromState?: string,
     toState?: string,
     metadata: Record<string, unknown> = {}
-  ): void {
+  ): Promise<void> {
     const log: AuditLog = {
       id: crypto.randomUUID(),
       organization_id: orgId,
@@ -101,17 +162,14 @@ export class DataStore {
     this.auditLogs.unshift(log);
   }
 
-  // --------------------------------------------------------------------------
-  // Notification Dispatcher
-  // --------------------------------------------------------------------------
-  public dispatchNotification(
+  public async dispatchNotification(
     orgId: UUID,
     userId: UUID,
     type: Notification['type'],
     title: string,
     body: string,
     payload: Record<string, unknown> = {}
-  ): void {
+  ): Promise<void> {
     const notification: Notification = {
       id: crypto.randomUUID(),
       organization_id: orgId,
@@ -128,18 +186,23 @@ export class DataStore {
   }
 
   // --------------------------------------------------------------------------
-  // Corridor Search Query (Matches docs/ARCHITECTURE.md)
+  // Corridor Search Query (async — satisfies IDataRepository)
   // --------------------------------------------------------------------------
-  public searchCorridorRides(params: {
+  public async searchCorridorRides(params: {
     orgId: UUID;
     originLat: number;
     originLng: number;
     destLat: number;
     destLng: number;
-    date: string; // YYYY-MM-DD
+    date: string;
+    timeZone?: string;
+    dateStartUtc?: string;
+    dateEndUtc?: string;
+    windowStartUtc?: string;
+    windowEndUtc?: string;
     seatsNeeded?: number;
     maxDetourMeters?: number;
-  }) {
+  }): Promise<CorridorSearchResult[]> {
     const {
       orgId,
       originLat,
@@ -147,94 +210,134 @@ export class DataStore {
       destLat,
       destLng,
       date,
+      timeZone,
+      dateStartUtc,
+      dateEndUtc,
+      windowStartUtc,
+      windowEndUtc,
       seatsNeeded = 1,
       maxDetourMeters = 3000,
     } = params;
 
-    const results: Array<{
-      ride: Ride;
-      driver: User;
-      vehicle: Vehicle;
-      route: RideRoute;
-      waypoints: RouteWaypoint[];
-      nearestPickupDistanceMeters: number;
-      nearestDropDistanceMeters: number;
-    }> = [];
-
-    const allRides = Array.from(this.rides.values()).filter(
-      (r) =>
-        r.organization_id === orgId &&
-        r.status === 'SCHEDULED' &&
-        r.available_seats >= seatsNeeded &&
-        r.departure_time.startsWith(date)
+    // 1. Organization & SCHEDULED filter
+    const orgScheduledRides = Array.from(this.rides.values()).filter(
+      (r) => r.organization_id === orgId && r.status === 'SCHEDULED'
     );
 
-    for (const ride of allRides) {
-      const route = Array.from(this.rideRoutes.values()).find(
-        (rr) => rr.ride_id === ride.id
-      );
+    // 2. Service date filter: UTC start to UTC next-day start
+    const dateMatchingRides = orgScheduledRides.filter((r) =>
+      isRideOnServiceDate(r.departure_time, date, timeZone, dateStartUtc, dateEndUtc)
+    );
+
+    // 3. Seat availability filter
+    const seatMatchingRides = dateMatchingRides.filter((r) => r.available_seats >= seatsNeeded);
+
+    // 4. Corridor matching (both pickup AND drop must be within maxDetourMeters)
+    const corridorMatchingResults: CorridorSearchResult[] = [];
+    for (const ride of seatMatchingRides) {
+      const route = Array.from(this.rideRoutes.values()).find((rr) => rr.ride_id === ride.id);
       if (!route) continue;
 
-      // 1. Bounding box check (expanded by ~0.05 degrees for corridor tolerance)
-      const buffer = 0.05;
-      const inBBox =
-        originLat >= route.min_latitude - buffer &&
-        originLat <= route.max_latitude + buffer &&
-        originLng >= route.min_longitude - buffer &&
-        originLng <= route.max_longitude + buffer;
-
-      if (!inBBox) continue;
-
-      // 2. Structured waypoint proximity scan
       const waypoints = Array.from(this.routeWaypoints.values())
         .filter((w) => w.route_id === route.id)
         .sort((a, b) => a.stop_order - b.stop_order);
 
-      let minPickupDist = Infinity;
-      let minDropDist = Infinity;
+      const corridorResult = matchCorridor(
+        route,
+        waypoints,
+        { latitude: originLat, longitude: originLng },
+        { latitude: destLat, longitude: destLng },
+        maxDetourMeters
+      );
 
-      for (const wp of waypoints) {
-        const dPickup = calculateHaversineDistanceMeters(
-          originLat,
-          originLng,
-          wp.latitude,
-          wp.longitude
-        );
-        if (dPickup < minPickupDist) minPickupDist = dPickup;
+      if (corridorResult.matches) {
+        const driver = this.users.get(ride.driver_id);
+        const vehicle = this.vehicles.get(ride.vehicle_id);
+        if (!driver || !vehicle) continue;
 
-        const dDrop = calculateHaversineDistanceMeters(
-          destLat,
-          destLng,
-          wp.latitude,
-          wp.longitude
-        );
-        if (dDrop < minDropDist) minDropDist = dDrop;
-      }
-
-      if (minPickupDist <= maxDetourMeters && minDropDist <= maxDetourMeters) {
-        const driver = this.users.get(ride.driver_id)!;
-        const vehicle = this.vehicles.get(ride.vehicle_id)!;
-
-        results.push({
+        corridorMatchingResults.push({
           ride,
           driver,
           vehicle,
           route,
           waypoints,
-          nearestPickupDistanceMeters: minPickupDist,
-          nearestDropDistanceMeters: minDropDist,
+          nearestPickupDistanceMeters: corridorResult.nearestPickupDistanceMeters,
+          nearestDropDistanceMeters: corridorResult.nearestDropDistanceMeters,
         });
       }
     }
 
-    return results;
+    // 5. Time window filter on corridor matches
+    let timeWindowMatchingResults = corridorMatchingResults;
+    if (windowStartUtc || windowEndUtc) {
+      timeWindowMatchingResults = corridorMatchingResults.filter((r) => {
+        const depMs = new Date(r.ride.departure_time).getTime();
+        if (windowStartUtc && depMs < new Date(windowStartUtc).getTime()) return false;
+        if (windowEndUtc && depMs > new Date(windowEndUtc).getTime()) return false;
+        return true;
+      });
+    }
+
+    const diagnostics: SearchDiagnostics = {
+      organization_id: orgId,
+      date,
+      time_zone: timeZone,
+      total_scheduled_rides_in_org: orgScheduledRides.length,
+      rides_matching_date: dateMatchingRides.length,
+      rides_matching_seats: seatMatchingRides.length,
+      rides_matching_corridor: corridorMatchingResults.length,
+      rides_matching_time_window: timeWindowMatchingResults.length,
+      rides_returned: timeWindowMatchingResults.length,
+    };
+    (timeWindowMatchingResults as any).diagnostics = diagnostics;
+
+    return timeWindowMatchingResults;
   }
 
   // --------------------------------------------------------------------------
   // Transactional Actions (State Machine Integrations)
   // --------------------------------------------------------------------------
 
-  public acceptRideRequest(requestId: UUID, actorId: UUID): { request: RideRequest; ride: Ride } {
+  public async acceptRideRequestWithPessimisticLock(
+    requestId: UUID,
+    actorId: UUID
+  ): Promise<{ request: RideRequest; ride: Ride }> {
+    const request = this.rideRequests.get(requestId);
+    if (!request) throw new Error('Ride request not found.');
+
+    const release = await this.acquireLock(`ride:${request.ride_id}`);
+    try {
+      const ride = this.rides.get(request.ride_id);
+      if (!ride) throw new Error('Associated ride not found.');
+      if (ride.driver_id !== actorId) throw new Error('Unauthorized: Only the ride host can approve requests.');
+      if (ride.available_seats < request.requested_seats) {
+        throw new Error(`Insufficient seats: requested ${request.requested_seats}, but only ${ride.available_seats} remain.`);
+      }
+
+      const { updatedRequest, updatedRide } = RideRequestStateMachine.accept(request, ride);
+      if (updatedRide.available_seats < 0) throw new Error('Check constraint violation: available_seats cannot be negative.');
+
+      this.rides.set(updatedRide.id, updatedRide);
+      this.rideRequests.set(updatedRequest.id, updatedRequest);
+
+      const passengerEntry: RidePassenger = {
+        id: crypto.randomUUID(),
+        organization_id: ride.organization_id,
+        ride_id: ride.id,
+        ride_request_id: request.id,
+        passenger_id: request.passenger_id,
+        seats_booked: request.requested_seats,
+        created_at: new Date().toISOString(),
+      };
+      this.ridePassengers.set(passengerEntry.id, passengerEntry);
+
+      return { request: updatedRequest, ride: updatedRide };
+    } finally {
+      release();
+    }
+  }
+
+  public async acceptRideRequest(requestId: UUID, actorId: UUID): Promise<{ request: RideRequest; ride: Ride }> {
     const request = this.rideRequests.get(requestId);
     if (!request) throw new Error('Ride request not found.');
 
@@ -245,13 +348,11 @@ export class DataStore {
       throw new Error('Unauthorized: Only the ride host can approve requests.');
     }
 
-    // Atomic state machine transition & seat deduction
     const { updatedRequest, updatedRide } = RideRequestStateMachine.accept(request, ride);
 
     this.rides.set(updatedRide.id, updatedRide);
     this.rideRequests.set(updatedRequest.id, updatedRequest);
 
-    // Create manifest entry
     const passengerEntry: RidePassenger = {
       id: crypto.randomUUID(),
       organization_id: ride.organization_id,
@@ -263,23 +364,14 @@ export class DataStore {
     };
     this.ridePassengers.set(passengerEntry.id, passengerEntry);
 
-    // Audit log
-    this.logAudit(
-      ride.organization_id,
-      actorId,
-      'RIDE_REQUEST',
-      request.id,
-      'STATE_TRANSITION',
-      request.status,
-      updatedRequest.status,
-      { seats_allocated: request.requested_seats, remaining_seats: updatedRide.available_seats }
+    void this.logAudit(
+      ride.organization_id, actorId, 'RIDE_REQUEST', request.id, 'STATE_TRANSITION',
+      request.status, updatedRequest.status,
+      { seats_booked: request.requested_seats, remaining_seats: updatedRide.available_seats }
     );
 
-    // Notification to passenger
-    this.dispatchNotification(
-      ride.organization_id,
-      request.passenger_id,
-      'REQUEST_ACCEPTED',
+    void this.dispatchNotification(
+      ride.organization_id, request.passenger_id, 'REQUEST_ACCEPTED',
       'Ride Request Confirmed!',
       `Your host has confirmed your seat for the commute on ${new Date(ride.departure_time).toLocaleDateString()}.`,
       { ride_id: ride.id, request_id: request.id }
@@ -288,7 +380,7 @@ export class DataStore {
     return { request: updatedRequest, ride: updatedRide };
   }
 
-  public rejectRideRequest(requestId: UUID, actorId: UUID, reason?: string): RideRequest {
+  public async rejectRideRequest(requestId: UUID, actorId: UUID, reason?: string): Promise<{ request: RideRequest; ride: Ride }> {
     const request = this.rideRequests.get(requestId);
     if (!request) throw new Error('Ride request not found.');
 
@@ -302,30 +394,22 @@ export class DataStore {
     const updatedRequest = RideRequestStateMachine.reject(request, reason);
     this.rideRequests.set(updatedRequest.id, updatedRequest);
 
-    this.logAudit(
-      ride.organization_id,
-      actorId,
-      'RIDE_REQUEST',
-      request.id,
-      'STATE_TRANSITION',
-      request.status,
-      updatedRequest.status,
-      { rejection_reason: reason }
+    void this.logAudit(
+      ride.organization_id, actorId, 'RIDE_REQUEST', request.id, 'STATE_TRANSITION',
+      request.status, updatedRequest.status, { rejection_reason: reason }
     );
 
-    this.dispatchNotification(
-      ride.organization_id,
-      request.passenger_id,
-      'REQUEST_REJECTED',
+    void this.dispatchNotification(
+      ride.organization_id, request.passenger_id, 'REQUEST_REJECTED',
       'Ride Request Declined',
       reason ? `Host declined: ${reason}` : 'Host declined this request due to route detour.',
       { ride_id: ride.id, request_id: request.id }
     );
 
-    return updatedRequest;
+    return { request: updatedRequest, ride };
   }
 
-  public cancelRideRequest(requestId: UUID, actorId: UUID, reason?: string): { request: RideRequest; ride: Ride } {
+  public async cancelRideRequest(requestId: UUID, actorId: UUID, reason?: string): Promise<{ request: RideRequest; ride: Ride }> {
     const request = this.rideRequests.get(requestId);
     if (!request) throw new Error('Ride request not found.');
 
@@ -343,7 +427,6 @@ export class DataStore {
     this.rideRequests.set(updatedRequest.id, updatedRequest);
 
     if (wasAccepted) {
-      // Remove from manifest
       for (const [key, p] of this.ridePassengers.entries()) {
         if (p.ride_request_id === request.id) {
           this.ridePassengers.delete(key);
@@ -351,23 +434,15 @@ export class DataStore {
       }
     }
 
-    this.logAudit(
-      ride.organization_id,
-      actorId,
-      'RIDE_REQUEST',
-      request.id,
-      'CANCEL',
-      request.status,
-      updatedRequest.status,
+    void this.logAudit(
+      ride.organization_id, actorId, 'RIDE_REQUEST', request.id, 'CANCEL',
+      request.status, updatedRequest.status,
       { cancellation_reason: reason, seats_restored: wasAccepted ? request.requested_seats : 0 }
     );
 
-    // Notify counterpart
     const recipientId = actorId === request.passenger_id ? ride.driver_id : request.passenger_id;
-    this.dispatchNotification(
-      ride.organization_id,
-      recipientId,
-      'REQUEST_CANCELLED',
+    void this.dispatchNotification(
+      ride.organization_id, recipientId, 'REQUEST_CANCELLED',
       'Carpool Booking Cancelled',
       reason ? `Booking cancelled: ${reason}` : 'A carpool seat booking was cancelled.',
       { ride_id: ride.id, request_id: request.id }
@@ -376,7 +451,7 @@ export class DataStore {
     return { request: updatedRequest, ride: updatedRide };
   }
 
-  public startRide(rideId: UUID, actorId: UUID): Ride {
+  public async startRide(rideId: UUID, actorId: UUID): Promise<Ride> {
     const ride = this.rides.get(rideId);
     if (!ride) throw new Error('Ride not found.');
     if (ride.driver_id !== actorId) throw new Error('Unauthorized.');
@@ -384,26 +459,18 @@ export class DataStore {
     const updatedRide = RideStateMachine.startRide(ride);
     this.rides.set(updatedRide.id, updatedRide);
 
-    this.logAudit(
-      ride.organization_id,
-      actorId,
-      'RIDE',
-      ride.id,
-      'STATE_TRANSITION',
-      ride.status,
-      updatedRide.status
+    void this.logAudit(
+      ride.organization_id, actorId, 'RIDE', ride.id, 'STATE_TRANSITION',
+      ride.status, updatedRide.status
     );
 
-    // Notify all accepted passengers
     const acceptedRequests = Array.from(this.rideRequests.values()).filter(
       (r) => r.ride_id === rideId && r.status === 'ACCEPTED'
     );
 
     for (const req of acceptedRequests) {
-      this.dispatchNotification(
-        ride.organization_id,
-        req.passenger_id,
-        'RIDE_STARTED',
+      void this.dispatchNotification(
+        ride.organization_id, req.passenger_id, 'RIDE_STARTED',
         'Your Ride Has Started!',
         'Your driver has departed. Please be ready at your designated pickup point.',
         { ride_id: ride.id }
@@ -413,7 +480,7 @@ export class DataStore {
     return updatedRide;
   }
 
-  public completeRide(rideId: UUID, actorId: UUID): Ride {
+  public async completeRide(rideId: UUID, actorId: UUID): Promise<Ride> {
     const ride = this.rides.get(rideId);
     if (!ride) throw new Error('Ride not found.');
     if (ride.driver_id !== actorId) throw new Error('Unauthorized.');
@@ -421,7 +488,6 @@ export class DataStore {
     const updatedRide = RideStateMachine.completeRide(ride);
     this.rides.set(updatedRide.id, updatedRide);
 
-    // Complete all accepted requests
     for (const req of this.rideRequests.values()) {
       if (req.ride_id === rideId && req.status === 'ACCEPTED') {
         const completedReq = RideRequestStateMachine.complete(req);
@@ -429,20 +495,15 @@ export class DataStore {
       }
     }
 
-    this.logAudit(
-      ride.organization_id,
-      actorId,
-      'RIDE',
-      ride.id,
-      'STATE_TRANSITION',
-      ride.status,
-      updatedRide.status
+    void this.logAudit(
+      ride.organization_id, actorId, 'RIDE', ride.id, 'STATE_TRANSITION',
+      ride.status, updatedRide.status
     );
 
     return updatedRide;
   }
 
-  public cancelRide(rideId: UUID, actorId: UUID, reason: string): Ride {
+  public async cancelRide(rideId: UUID, actorId: UUID, reason: string): Promise<Ride> {
     const ride = this.rides.get(rideId);
     if (!ride) throw new Error('Ride not found.');
     if (ride.driver_id !== actorId) throw new Error('Unauthorized.');
@@ -450,20 +511,13 @@ export class DataStore {
     const updatedRide = RideStateMachine.cancelRide(ride, reason);
     this.rides.set(updatedRide.id, updatedRide);
 
-    // Cascade cancellation to all pending and accepted requests
     for (const req of this.rideRequests.values()) {
       if (req.ride_id === rideId && (req.status === 'PENDING' || req.status === 'ACCEPTED')) {
-        const { updatedRequest } = RideRequestStateMachine.cancel(
-          req,
-          ride,
-          `Driver cancelled trip: ${reason}`
-        );
+        const { updatedRequest } = RideRequestStateMachine.cancel(req, ride, `Driver cancelled trip: ${reason}`);
         this.rideRequests.set(updatedRequest.id, updatedRequest);
 
-        this.dispatchNotification(
-          ride.organization_id,
-          req.passenger_id,
-          'RIDE_CANCELLED',
+        void this.dispatchNotification(
+          ride.organization_id, req.passenger_id, 'RIDE_CANCELLED',
           'Ride Cancelled by Host',
           `The ride scheduled for ${new Date(ride.departure_time).toLocaleTimeString()} was cancelled: ${reason}`,
           { ride_id: ride.id }
@@ -471,17 +525,113 @@ export class DataStore {
       }
     }
 
-    this.logAudit(
-      ride.organization_id,
-      actorId,
-      'RIDE',
-      ride.id,
-      'CANCEL',
-      ride.status,
-      updatedRide.status,
-      { cancelled_reason: reason }
+    void this.logAudit(
+      ride.organization_id, actorId, 'RIDE', ride.id, 'CANCEL',
+      ride.status, updatedRide.status, { cancelled_reason: reason }
     );
 
     return updatedRide;
+  }
+
+  public async activateUserWithPessimisticLock(
+    token: string,
+    passwordHash: string
+  ): Promise<{ user: User; capabilities: UserCapability; notifiedAdminCount: number }> {
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const release = await this.acquireLock(`activation:${tokenHash}`);
+
+    try {
+      const users = await this.getAllUsers();
+      const user = users.find((u) => u.invitation_token === tokenHash);
+      if (!user) {
+        throw new ActivationError(404, 'ERR_INVALID_TOKEN', 'Invitation token not found or already used.');
+      }
+
+      if (user.status !== 'PENDING_VERIFICATION') {
+        throw new ActivationError(409, 'ERR_INVALID_STATUS', 'User account is not pending verification.');
+      }
+
+      const now = new Date();
+      if (user.invitation_token_expires_at && new Date(user.invitation_token_expires_at) <= now) {
+        throw new ActivationError(410, 'ERR_TOKEN_EXPIRED', 'Invitation token has expired. Please ask your administrator to send a new invitation.');
+      }
+
+      const updatedUser: User = {
+        ...user,
+        password_hash: passwordHash,
+        status: 'ACTIVE',
+        invitation_token: undefined,
+        invitation_token_expires_at: undefined,
+        updated_at: now.toISOString(),
+      };
+      await this.setUser(updatedUser);
+
+      let userCap = await this.getUserCapability(user.id);
+      if (!userCap) {
+        userCap = {
+          id: crypto.randomUUID(),
+          user_id: user.id,
+          organization_id: user.organization_id,
+          can_ride: true,
+          can_drive: false,
+          is_org_admin: false,
+          created_at: now.toISOString(),
+          updated_at: now.toISOString(),
+        };
+        await this.setUserCapability(userCap);
+      }
+
+      // Notify all active org admins (excluding newly activated user unless already admin)
+      let notifiedAdminCount = 0;
+      for (const [_, cap] of this.userCapabilities.entries()) {
+        if (cap.organization_id === user.organization_id && cap.is_org_admin) {
+          if (cap.user_id === user.id && !userCap.is_org_admin) continue;
+          const admin = await this.getUser(cap.user_id);
+          if (admin && admin.status === 'ACTIVE') {
+            // Check for existing notification to avoid duplicates
+            const existingNotifs = Array.from(this.notifications.values()).filter(
+              (n) =>
+                n.organization_id === user.organization_id &&
+                n.user_id === admin.id &&
+                n.type === 'USER_JOINED' &&
+                (n.payload_json as any)?.user_id === user.id
+            );
+            if (existingNotifs.length > 0) continue;
+
+            await this.dispatchNotification(
+              user.organization_id,
+              admin.id,
+              'USER_JOINED',
+              'New employee joined',
+              `${user.full_name} (${user.email}) has joined the platform.`,
+              {
+                user_id: user.id,
+                organization_id: user.organization_id,
+                department: user.work_department || 'General',
+              }
+            );
+            notifiedAdminCount++;
+          }
+        }
+      }
+
+      await this.logAudit(
+        user.organization_id,
+        user.id,
+        'USER',
+        user.id,
+        'STATE_TRANSITION',
+        'PENDING_VERIFICATION',
+        'ACTIVE',
+        {
+          activation_method: 'invitation_token',
+          admins_notified: notifiedAdminCount,
+        }
+      );
+
+      return { user: updatedUser, capabilities: userCap, notifiedAdminCount };
+    } finally {
+      release();
+    }
   }
 }

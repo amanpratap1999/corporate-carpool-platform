@@ -1,18 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getRequestContext } from '@/services/api-context';
-import { initializeSeedData } from '@/services/seed-data';
+import { requireAuth } from '@/services/api-context';
+import { getRepository } from '@/services/repository-factory';
 
 export async function GET(req: NextRequest) {
-  const store = initializeSeedData();
-  const ctx = getRequestContext(req);
+  const auth = await requireAuth(req);
+  if (!auth.success) {
+    return auth.response;
+  }
+  const ctx = auth.ctx;
+  const store = getRepository();
 
-  const allUsers = Array.from(store.users.values()).map((u) => ({
-    id: u.id,
-    full_name: u.full_name,
-    email: u.email,
-    work_department: u.work_department,
-    capabilities: store.userCapabilities.get(u.id),
-  }));
+  // Tenant isolation: only return users belonging to the caller's organization
+  const tenantUsers = await Promise.all((await store.getAllUsers())
+    .filter((u) => u.organization_id === ctx.org.id)
+    .map(async (u) => ({
+      id: u.id,
+      full_name: u.full_name,
+      email: u.email,
+      work_department: u.work_department,
+      capabilities: await store.getUserCapability(u.id),
+    })));
 
   return NextResponse.json({
     id: ctx.user.id,
@@ -23,6 +30,6 @@ export async function GET(req: NextRequest) {
     work_department: ctx.user.work_department,
     work_location: ctx.user.work_location,
     capabilities: ctx.capabilities,
-    available_users: allUsers,
+    available_users: tenantUsers,
   });
 }

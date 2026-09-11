@@ -455,7 +455,7 @@ CREATE TABLE ride_routes (
     min_longitude DECIMAL(10, 7) NOT NULL,
     max_longitude DECIMAL(10, 7) NOT NULL,
     bounding_box JSONB NOT NULL, -- {"min_lat": X, "max_lat": Y, "min_lng": Z, "max_lng": W}
-    overview_polyline TEXT,
+    encoded_polyline TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_ride_routes_ride UNIQUE (ride_id),

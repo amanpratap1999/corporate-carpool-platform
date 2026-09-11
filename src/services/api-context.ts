@@ -1,11 +1,14 @@
 /**
- * API Context helper: extracts tenant and actor info
- * Supports X-User-Id and X-Organization-Id headers for role-switching in Web UI
+ * API Context & Security Middleware: Extracts verified tenant and actor context
+ * Validates cryptographically signed JWT or dev session tokens.
+ * Client-controlled X-User-Id and X-Organization-Id headers are strictly rejected/ignored.
  */
 
 import { NextRequest } from 'next/server';
-import { initializeSeedData } from './seed-data';
+import { getRepository } from './repository-factory';
 import { User, Organization, UserCapability } from '../domain/types';
+import { getAuthProvider } from '../infrastructure/auth/auth-factory';
+import { rateLimiter } from '../infrastructure/security/rate-limiter';
 
 export interface RequestContext {
   org: Organization;
@@ -13,26 +16,149 @@ export interface RequestContext {
   capabilities: UserCapability;
 }
 
-export function getRequestContext(req: NextRequest): RequestContext {
-  const store = initializeSeedData();
+export type AuthResult =
+  | { success: true; ctx: RequestContext }
+  | { success: false; response: Response };
 
-  // Default to Alex Rivera if not specified
-  const requestedUserId =
-    req.headers.get('x-user-id') || '22222222-2222-4222-8222-222222222222';
-  const requestedOrgId =
-    req.headers.get('x-organization-id') || '11111111-1111-4111-8111-111111111111';
+export function problemResponse(
+  status: number,
+  title: string,
+  detail: string,
+  code: string,
+  instance: string,
+  headers?: Record<string, string>
+): Response {
+  return Response.json(
+    {
+      type: `https://api.carpool.corp/errors/${code.toLowerCase().replace(/_/g, '-')}`,
+      title,
+      status,
+      detail,
+      code,
+      instance,
+      timestamp: new Date().toISOString(),
+    },
+    {
+      status,
+      headers: {
+        'Content-Type': 'application/problem+json',
+        ...headers,
+      },
+    }
+  );
+}
 
-  let user = store.users.get(requestedUserId);
+/**
+ * Extracts and cryptographically verifies the Bearer token from the request.
+ * Enforces authentication and resolves the verified actor and tenant context.
+ */
+export async function requireAuth(req: NextRequest): Promise<AuthResult> {
+  const pathname = req.nextUrl.pathname;
+
+  // 1. Extract token from Authorization header or cookie
+  let token: string | null = null;
+  const authHeader = req.headers.get('authorization');
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.substring(7).trim();
+  } else if (req.cookies.has('carpool_session')) {
+    token = req.cookies.get('carpool_session')?.value || null;
+  }
+
+  // 2. Reject unauthenticated requests
+  if (!token) {
+    return {
+      success: false,
+      response: problemResponse(
+        401,
+        'Unauthorized',
+        'Valid cryptographic Bearer token or carpool_session cookie is required',
+        'ERR_UNAUTHORIZED',
+        pathname
+      ),
+    };
+  }
+
+  // 3. Cryptographically verify token claims
+  const authProvider = getAuthProvider();
+  const claims = await authProvider.verifyToken(token);
+
+  if (!claims || !claims.userId || !claims.organizationId) {
+    return {
+      success: false,
+      response: problemResponse(
+        401,
+        'Unauthorized',
+        'Token signature verification failed or token has expired',
+        'ERR_TOKEN_INVALID',
+        pathname
+      ),
+    };
+  }
+
+  // 4. Rate limiting check per authenticated user (120 req/min general limit)
+  const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0].trim() || '127.0.0.1';
+  const userRateLimit = rateLimiter.check(`user:${claims.userId}`, 120, 60);
+  if (!userRateLimit.allowed) {
+    return {
+      success: false,
+      response: problemResponse(
+        429,
+        'Too Many Requests',
+        `User rate limit exceeded. Retry in ${userRateLimit.resetSeconds}s`,
+        'ERR_RATE_LIMIT_EXCEEDED',
+        pathname,
+        { 'Retry-After': String(userRateLimit.resetSeconds) }
+      ),
+    };
+  }
+
+  // 5. Resolve user and tenant from store
+  const store = getRepository();
+  const user = await store.getUser(claims.userId);
   if (!user) {
-    user = Array.from(store.users.values())[0];
+    return {
+      success: false,
+      response: problemResponse(
+        401,
+        'Unauthorized',
+        'User account associated with this token was not found',
+        'ERR_USER_NOT_FOUND',
+        pathname
+      ),
+    };
   }
 
-  let org = store.organizations.get(requestedOrgId);
+  // Cross-tenant verification: Ensure user belongs to the claimed organization
+  if (user.organization_id !== claims.organizationId) {
+    return {
+      success: false,
+      response: problemResponse(
+        403,
+        'Forbidden',
+        'User does not belong to the claimed organization tenant',
+        'ERR_TENANT_MISMATCH',
+        pathname
+      ),
+    };
+  }
+
+  const org = await store.getOrganization(claims.organizationId);
   if (!org) {
-    org = Array.from(store.organizations.values())[0];
+    return {
+      success: false,
+      response: problemResponse(
+        404,
+        'Organization Not Found',
+        'Claimed tenant organization does not exist',
+        'ERR_ORG_NOT_FOUND',
+        pathname
+      ),
+    };
   }
 
-  let capabilities = store.userCapabilities.get(user.id);
+  // 6. Resolve capabilities from authoritative server-side store
+  // NEVER trust client-provided claims or tokens for administrative privileges
+  let capabilities = await store.getUserCapability(user.id);
   if (!capabilities) {
     capabilities = {
       id: crypto.randomUUID(),
@@ -46,29 +172,44 @@ export function getRequestContext(req: NextRequest): RequestContext {
     };
   }
 
-  return { org, user, capabilities };
+  return {
+    success: true,
+    ctx: {
+      org,
+      user,
+      capabilities,
+    },
+  };
 }
 
-export function problemResponse(
-  status: number,
-  title: string,
-  detail: string,
-  code: string,
-  instance: string
-) {
-  return Response.json(
-    {
-      type: `https://api.carpool.corp/errors/${code.toLowerCase().replace(/_/g, '-')}`,
-      title,
-      status,
-      detail,
-      code,
-      instance,
-      timestamp: new Date().toISOString(),
-    },
-    {
-      status,
-      headers: { 'Content-Type': 'application/problem+json' },
-    }
-  );
+/**
+ * Enforces both authentication and administrator privileges (is_org_admin)
+ * Authoritative capability check directly against the server-side database.
+ */
+export async function requireAdmin(req: NextRequest): Promise<AuthResult> {
+  const auth = await requireAuth(req);
+  if (!auth.success) {
+    return auth;
+  }
+
+  // Authoritative server-side capability check directly from database store
+  const store = getRepository();
+  const dbCap = await store.getUserCapability(auth.ctx.user.id);
+
+  if (!dbCap || !dbCap.is_org_admin || dbCap.organization_id !== auth.ctx.org.id) {
+    return {
+      success: false,
+      response: problemResponse(
+        403,
+        'Forbidden',
+        'Organization administrator capability is required for this operation',
+        'ERR_FORBIDDEN_NOT_ADMIN',
+        req.nextUrl.pathname
+      ),
+    };
+  }
+
+  // Ensure request context reflects verified database capability
+  auth.ctx.capabilities = dbCap;
+  return auth;
 }
