@@ -97,7 +97,7 @@ export async function requireAuth(req: NextRequest): Promise<AuthResult> {
 
   // 4. Rate limiting check per authenticated user (120 req/min general limit)
   const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0].trim() || '127.0.0.1';
-  const userRateLimit = rateLimiter.check(`user:${claims.userId}`, 120, 60);
+  const userRateLimit = await rateLimiter.checkShared(`user:${claims.userId}`, 120, 60);
   if (!userRateLimit.allowed) {
     return {
       success: false,
@@ -192,11 +192,9 @@ export async function requireAdmin(req: NextRequest): Promise<AuthResult> {
     return auth;
   }
 
-  // Authoritative server-side capability check directly from database store
-  const store = getRepository();
-  const dbCap = await store.getUserCapability(auth.ctx.user.id);
-
-  if (!dbCap || !dbCap.is_org_admin || dbCap.organization_id !== auth.ctx.org.id) {
+  // Authoritative capability check from already-verified context
+  const cap = auth.ctx.capabilities;
+  if (!cap || !cap.is_org_admin || cap.organization_id !== auth.ctx.org.id) {
     return {
       success: false,
       response: problemResponse(
@@ -209,7 +207,5 @@ export async function requireAdmin(req: NextRequest): Promise<AuthResult> {
     };
   }
 
-  // Ensure request context reflects verified database capability
-  auth.ctx.capabilities = dbCap;
   return auth;
 }

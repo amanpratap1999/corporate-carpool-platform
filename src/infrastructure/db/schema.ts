@@ -127,7 +127,7 @@ export const users = pgTable(
     updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex('uq_users_org_email').on(table.organization_id, table.email),
+    uniqueIndex('uq_users_org_lower_email').on(table.organization_id, sql`lower(${table.email})`),
     index('idx_users_org_status').on(table.organization_id, table.status),
     index('idx_users_invitation_token').on(table.invitation_token),
   ]
@@ -486,3 +486,41 @@ export const auditLogs = pgTable(
     ),
   ]
 );
+
+export const rateLimits = pgTable(
+  'rate_limits',
+  {
+    key: varchar('key', { length: 255 }).primaryKey(),
+    count: integer('count').notNull().default(1),
+    reset_at: timestamp('reset_at', { withTimezone: true }).notNull(),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('idx_rate_limits_reset_at').on(table.reset_at),
+  ]
+);
+
+export const userPreferences = pgTable(
+  'user_preferences',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    user_id: uuid('user_id')
+      .notNull()
+      .unique()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    organization_id: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'restrict' }),
+    free_text_preferences: text('free_text_preferences'),
+    tags: text('tags').array().default([]),
+    max_detour_minutes: integer('max_detour_minutes').default(15),
+    quiet_ride: boolean('quiet_ride').default(false),
+    created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    index('idx_user_preferences_user').on(table.user_id),
+  ]
+);
+

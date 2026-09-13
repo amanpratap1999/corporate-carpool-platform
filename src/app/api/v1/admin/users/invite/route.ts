@@ -38,11 +38,19 @@ export async function POST(req: NextRequest) {
   }
 
   // Domain verification: check company email domain
-  const emailDomain = email.substring(email.lastIndexOf('@')).toLowerCase();
-  const allowedDomains = (ctx.org.allowed_email_domains || []).map((d) =>
-    d.startsWith('@') ? d.toLowerCase() : `@${d.toLowerCase()}`
-  );
-  if (!allowedDomains.includes(emailDomain) && emailDomain !== '@acme.corp') {
+  const emailDomain = email.substring(email.lastIndexOf('@')).toLowerCase().trim();
+  const rawDomains = Array.isArray(ctx.org.allowed_email_domains)
+    ? ctx.org.allowed_email_domains
+    : typeof ctx.org.allowed_email_domains === 'string'
+    ? (ctx.org.allowed_email_domains as string).split(',')
+    : [];
+
+  const allowedDomains = rawDomains
+    .map((d: string) => d.trim().toLowerCase())
+    .filter(Boolean)
+    .map((d: string) => (d.startsWith('@') ? d : `@${d}`));
+
+  if (!allowedDomains.includes(emailDomain)) {
     return problemResponse(
       422,
       'Corporate Domain Mismatch',
@@ -55,10 +63,8 @@ export async function POST(req: NextRequest) {
   const store = getRepository();
 
   // Check if user already exists
-  const existingUser = (await store.getAllUsers()).find(
-    (u) => u.email.toLowerCase() === email.toLowerCase() && u.organization_id === ctx.org.id
-  );
-  if (existingUser) {
+  const existingUser = await store.getUserByEmail(email);
+  if (existingUser && existingUser.organization_id === ctx.org.id) {
     return problemResponse(
       409,
       'Conflict',
@@ -91,8 +97,6 @@ export async function POST(req: NextRequest) {
     updated_at: now,
   };
 
-  await store.setUser(newUser);
-
   const newCaps = {
     id: crypto.randomUUID(),
     user_id: newUserId,
@@ -104,13 +108,12 @@ export async function POST(req: NextRequest) {
     updated_at: now,
   };
 
-  await store.setUserCapability(newCaps);
-
-  // Audit log
-  await store.logAudit(ctx.org.id, ctx.user.id, 'USER', newUserId, 'CREATE', undefined, 'PENDING_VERIFICATION', {
+  // Atomically persist user, capabilities, and audit log
+  await store.inviteUser(newUser, newCaps, {
     email,
     full_name,
     can_drive: Boolean(can_drive),
+    invited_by: ctx.user.id,
   });
 
   return Response.json(

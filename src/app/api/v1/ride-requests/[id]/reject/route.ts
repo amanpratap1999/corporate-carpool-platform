@@ -34,8 +34,8 @@ export async function POST(
     const body = await req.json().catch(() => ({}));
     const reason = body.reason;
 
-    const updatedRequest = store.rejectRideRequest(requestId, ctx.user.id, reason);
-    return NextResponse.json({ request: updatedRequest });
+    const result = await store.rejectRideRequest(requestId, ctx.user.id, reason);
+    return NextResponse.json({ request: result.request, ride: result.ride });
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : 'Unknown error';
     return problemResponse(409, 'Cannot Reject Request', errorMsg, 'INVALID_TRANSITION', `/api/v1/ride-requests/${requestId}/reject`);

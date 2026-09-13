@@ -43,6 +43,7 @@ export interface IDataRepository {
 
   // Users
   getUser(id: UUID): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
   getAllUsers(): Promise<User[]>;
   setUser(item: User): Promise<void>;
 
@@ -175,6 +176,43 @@ export interface IDataRepository {
     token: string,
     passwordHash: string
   ): Promise<{ user: User; capabilities: UserCapability; notifiedAdminCount: number }>;
+
+  // Atomic ride creation
+  createRideWithRoute(
+    ride: Ride,
+    route: RideRoute,
+    waypoints: RouteWaypoint[],
+    auditMetadata?: Record<string, unknown>
+  ): Promise<{ ride: Ride; route: RideRoute; waypoints: RouteWaypoint[] }>;
+
+  // Worker transactional methods & distributed lock
+  expirePendingRequest(requestId: UUID): Promise<boolean>;
+  autoCancelRide(rideId: UUID, reason: string): Promise<boolean>;
+  acquireDistributedLock(lockId?: number): Promise<boolean>;
+  releaseDistributedLock(lockId?: number): Promise<boolean>;
+
+  // Atomic user invitation
+  inviteUser(
+    user: User,
+    capability: UserCapability,
+    auditMetadata?: Record<string, unknown>
+  ): Promise<{ user: User; capability: UserCapability }>;
+
+  // Org-scoped queries and aggregates
+  getRidesByOrganization(orgId: UUID): Promise<Ride[]>;
+  getRideRequestsByOrganization(orgId: UUID): Promise<RideRequest[]>;
+  getUsersByOrganization(orgId: UUID): Promise<User[]>;
+  getVehiclesByOrganization(orgId: UUID): Promise<Vehicle[]>;
+  getOrganizationRideMetrics(orgId: UUID): Promise<{
+    totalRides: number;
+    scheduledRides: number;
+    completedRides: number;
+    cancelledRides: number;
+    totalSeatsOffered: number;
+    availableSeats: number;
+    totalRequests: number;
+    acceptedRequests: number;
+  }>;
 }
 
 export class ActivationError extends Error {

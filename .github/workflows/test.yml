@@ -1,0 +1,45 @@
+name: Test Suite
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  test:
+    name: Run Unit & Integration Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Unit Tests (In-Memory Mode)
+        run: npm run test:unit
+        env:
+          NODE_ENV: test
+          STORAGE_MODE: memory
+          JWT_SECRET: test-secret-at-least-32-characters-long!
+
+      - name: Run Migrations on PGlite
+        run: npm run db:migrate
+        env:
+          DATABASE_URL: pglite://data/ci-pglite
+
+      - name: Run Integration Tests with PostgresStore (PGlite)
+        run: npm run test:integration
+        env:
+          NODE_ENV: test
+          STORAGE_MODE: postgres
+          DATABASE_URL: pglite://data/ci-pglite
+          JWT_SECRET: test-secret-at-least-32-characters-long!

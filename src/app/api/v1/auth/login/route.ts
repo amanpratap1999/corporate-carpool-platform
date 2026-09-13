@@ -11,7 +11,7 @@ export async function POST(req: NextRequest) {
   const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0].trim() || '127.0.0.1';
 
   // 1. Strict rate limit (5 attempts / min per IP)
-  const rateLimit = rateLimiter.check(`login:${clientIp}`, 5, 60);
+  const rateLimit = await rateLimiter.checkShared(`login:${clientIp}`, 5, 60);
   if (!rateLimit.allowed) {
     return problemResponse(
       429,
@@ -43,10 +43,7 @@ export async function POST(req: NextRequest) {
   }
 
   const store = getRepository();
-  const allUsers = await store.getAllUsers();
-  const matchedUser = allUsers.find(
-    (u) => u.email.toLowerCase() === email.toLowerCase().trim()
-  );
+  const matchedUser = await store.getUserByEmail(email.toLowerCase().trim());
 
   // Use a constant-time path for both "user not found" and "bad password"
   // to prevent user enumeration attacks.

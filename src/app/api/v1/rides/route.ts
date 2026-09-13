@@ -349,10 +349,7 @@ export async function POST(req: NextRequest) {
     const scheduledRide = RideStateMachine.publish(newRide);
     scheduledRide.status = 'SCHEDULED';
 
-    await store.setRide(scheduledRide);
-    await store.setRideRoute(newRoute);
-
-    // Save authoritative waypoints with strict sequential stop_order
+    // Build authoritative waypoints with strict sequential stop_order
     const savedWaypoints: RouteWaypoint[] = [];
     for (let idx = 0; idx < synthesizedWaypoints.length; idx++) {
       const w = synthesizedWaypoints[idx];
@@ -368,11 +365,10 @@ export async function POST(req: NextRequest) {
         estimated_arrival_offset_seconds: w.estimated_arrival_offset_seconds,
         created_at: new Date().toISOString(),
       };
-      await store.setRouteWaypoint(waypoint);
       savedWaypoints.push(waypoint);
     }
 
-    await store.logAudit(ctx.org.id, ctx.user.id, 'RIDE', scheduledRide.id, 'CREATE', 'DRAFT', 'SCHEDULED', {
+    const result = await store.createRideWithRoute(scheduledRide, newRoute, savedWaypoints, {
       total_seats: scheduledRide.total_seats_offered,
       departure_time: scheduledRide.departure_time,
       total_distance_meters: newRoute.total_distance_meters,
@@ -383,9 +379,9 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(
       {
-        ride: scheduledRide,
-        route: newRoute,
-        waypoints: savedWaypoints,
+        ride: result.ride,
+        route: result.route,
+        waypoints: result.waypoints,
       },
       { status: 201 }
     );

@@ -7,6 +7,9 @@ import {
   DirectionsRouteOption,
   decodePolyline,
 } from '@/domain/types';
+import { LruCache } from '@/infrastructure/cache/lru-cache';
+
+const directionsCache = new LruCache<{ routes: DirectionsRouteOption[] }>(500, 300);
 
 function formatDistance(meters: number): string {
   if (meters < 1000) {
@@ -130,6 +133,19 @@ export async function POST(req: NextRequest) {
       'ERR_GOOGLE_MAPS_NOT_CONFIGURED',
       req.nextUrl.pathname
     );
+  }
+
+  // Server-side cache lookup (keyed by coordinates rounded to 5 decimals ~1.1m and all route preferences)
+  const normalizedPreferences = {
+    avoid_tolls: Boolean(preferences?.avoid_tolls),
+    avoid_highways: Boolean(preferences?.avoid_highways),
+    avoid_ferries: Boolean(preferences?.avoid_ferries),
+    routing_preference: preferences?.routing_preference || 'DEFAULT',
+  };
+  const cacheKey = `${origin.lat.toFixed(5)},${origin.lng.toFixed(5)}->${destination.lat.toFixed(5)},${destination.lng.toFixed(5)}:${intermediateWaypoints.map((w) => `${w.lat.toFixed(5)},${w.lng.toFixed(5)}`).join('|')}:${JSON.stringify(normalizedPreferences)}:${alternatives}`;
+  const cached = directionsCache.get(cacheKey);
+  if (cached) {
+    return NextResponse.json(cached);
   }
 
   try {
@@ -283,6 +299,7 @@ export async function POST(req: NextRequest) {
           };
         });
 
+        directionsCache.set(cacheKey, { routes });
         return NextResponse.json({ routes });
       }
     }
@@ -477,6 +494,7 @@ export async function POST(req: NextRequest) {
       };
     });
 
+    directionsCache.set(cacheKey, { routes });
     return NextResponse.json({ routes });
   } catch (err) {
     console.error('Google Directions API call failed:', err);

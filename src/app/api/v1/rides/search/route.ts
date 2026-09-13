@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
   const ctx = auth.ctx;
 
   // Rate limit: 30 searches per min per user
-  const searchLimit = rateLimiter.check(`search:${ctx.user.id}`, 30, 60);
+  const searchLimit = await rateLimiter.checkShared(`search:${ctx.user.id}`, 30, 60);
   if (!searchLimit.allowed) {
     return problemResponse(
       429,
@@ -83,6 +83,22 @@ export async function GET(req: NextRequest) {
         '/api/v1/rides/search'
       );
     }
+  }
+
+  const isBareLocalTime = (val: string | null | undefined): boolean => {
+    if (!val) return false;
+    const trimmed = val.trim();
+    return /^\d{1,2}:\d{2}(?::\d{2})?$/.test(trimmed);
+  };
+
+  if ((isBareLocalTime(windowStart) || isBareLocalTime(windowEnd) || isBareLocalTime(targetTimeParam)) && !timeZone) {
+    return problemResponse(
+      422,
+      'Missing Time Zone',
+      'time_zone parameter is required when window_start, window_end, or target_time is specified as a local time (HH:mm).',
+      'ERR_MISSING_TIMEZONE',
+      '/api/v1/rides/search'
+    );
   }
 
   const parsedOriginLat = parseFloat(originLat);

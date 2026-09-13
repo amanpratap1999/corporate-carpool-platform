@@ -48,7 +48,7 @@ describe('DataStore and Corridor Search Services', () => {
     const initialRide = store.rides.get(rideAId)!;
     const initialSeats = initialRide.available_seats; // 2
 
-    const { request, ride } = await store.acceptRideRequest(sarahReqId, ALEX_ID);
+    const { request, ride } = await store.acceptRideRequestWithPessimisticLock(sarahReqId, ALEX_ID);
 
     expect(request.status).toBe('ACCEPTED');
     expect(ride.available_seats).toBe(initialSeats - 1);
@@ -72,7 +72,7 @@ describe('DataStore and Corridor Search Services', () => {
     const sarahReqId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
 
     // First accept the request so cancellation restores seats
-    await store.acceptRideRequest(sarahReqId, ALEX_ID);
+    await store.acceptRideRequestWithPessimisticLock(sarahReqId, ALEX_ID);
     const rideAfterAccept = store.rides.get(rideAId)!;
     const seatsAfterAccept = rideAfterAccept.available_seats; // 1
 

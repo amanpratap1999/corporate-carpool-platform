@@ -17,7 +17,7 @@ import {
 } from "../domain/types";
 import { getDb, withTransaction } from "../infrastructure/db/client";
 import * as schema from "../infrastructure/db/schema";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, or, sql } from "drizzle-orm";
 import { RideStateMachine } from "../domain/state-machines/ride-state-machine";
 import { RideRequestStateMachine } from "../domain/state-machines/ride-request-state-machine";
 import { calculateHaversineDistanceMeters } from "../domain/geo";
@@ -201,6 +201,18 @@ export class PostgresStore {
     if (!db) return undefined;
     const res = await db.select().from(schema.users).where(eq(schema.users.id, id)).limit(1);
     return res[0] ? fromSqlDates(res[0]) as unknown as User : undefined;
+  }
+
+  public async getUserByEmail(email: string): Promise<User | undefined> {
+    const db = getDb();
+    if (!db) return undefined;
+    const normalized = email.toLowerCase().trim();
+    const res = await db
+      .select()
+      .from(schema.users)
+      .where(sql`lower(${schema.users.email}) = ${normalized}`)
+      .limit(1);
+    return res[0] ? (fromSqlDates(res[0]) as unknown as User) : undefined;
   }
 
   public async getAllUsers(): Promise<User[]> {
@@ -673,6 +685,7 @@ export class PostgresStore {
       
       const request = normalizeRideRequest(reqRows[0]);
       if (!request) throw new Error("Ride request not found.");
+      if (request.status !== "PENDING") throw new Error(`Ride request is already ${request.status}.`);
 
       // 2. Lock the associated ride
       const rideRows = await tx
@@ -683,10 +696,19 @@ export class PostgresStore {
         
       const ride = normalizeRide(rideRows[0]);
       if (!ride) throw new Error("Associated ride not found.");
+      if (ride.organization_id !== request.organization_id) {
+        throw new Error("Tenant isolation violation: Request and ride belong to different organizations.");
+      }
 
       // 3. Domain validation
       if (ride.driver_id !== actorId) {
         throw new Error("Unauthorized: Only the ride host can approve requests.");
+      }
+      if (ride.status !== "SCHEDULED") {
+        throw new Error(`Cannot accept request for ride in ${ride.status} status.`);
+      }
+      if (ride.available_seats < request.requested_seats) {
+        throw new Error(`Insufficient seats: ${ride.available_seats} available, ${request.requested_seats} requested.`);
       }
 
       // 4. State machine transition
@@ -743,201 +765,245 @@ export class PostgresStore {
     return result;
   }
 
-  public async acceptRideRequest(requestId: UUID, actorId: UUID): Promise<{ request: RideRequest; ride: Ride }> {
-    const request = await this.getRideRequest(requestId);
-    if (!request) throw new Error("Ride request not found.");
-
-    const ride = await this.getRide(request.ride_id);
-    if (!ride) throw new Error("Associated ride not found.");
-
-    if (ride.driver_id !== actorId) {
-      throw new Error("Unauthorized: Only the ride host can approve requests.");
-    }
-
-    const { updatedRequest, updatedRide } = RideRequestStateMachine.accept(request, ride);
-
-    await this.setRide(updatedRide);
-    await this.setRideRequest(updatedRequest);
-
-    const passengerEntry: RidePassenger = {
-      id: crypto.randomUUID(),
-      organization_id: ride.organization_id,
-      ride_id: ride.id,
-      ride_request_id: request.id,
-      passenger_id: request.passenger_id,
-      seats_booked: request.requested_seats,
-      created_at: new Date().toISOString(),
-    };
-    await this.setRidePassenger(passengerEntry);
-
-    await this.logAudit(
-      ride.organization_id,
-      actorId,
-      "RIDE_REQUEST",
-      request.id,
-      "STATE_TRANSITION",
-      request.status,
-      updatedRequest.status,
-      { seats_booked: request.requested_seats, remaining_seats: updatedRide.available_seats }
-    );
-
-    await this.dispatchNotification(
-      ride.organization_id,
-      request.passenger_id,
-      "REQUEST_ACCEPTED",
-      "Ride Request Confirmed!",
-      "Your host has confirmed your seat for the commute on " + new Date(ride.departure_time).toLocaleDateString() + ".",
-      { ride_id: ride.id, request_id: request.id }
-    );
-
-    return { request: updatedRequest, ride: updatedRide };
-  }
-
   public async rejectRideRequest(requestId: UUID, actorId: UUID, reason?: string): Promise<{ request: RideRequest; ride: Ride }> {
-    const request = await this.getRideRequest(requestId);
-    if (!request) throw new Error("Ride request not found.");
+    const db = getDb();
+    if (!db) throw new Error("Database not initialized");
 
-    const ride = await this.getRide(request.ride_id);
-    if (!ride) throw new Error("Associated ride not found.");
+    const result = await withTransaction(async (tx) => {
+      const reqRows = await tx
+        .select()
+        .from(schema.rideRequests)
+        .where(eq(schema.rideRequests.id, requestId))
+        .for('update');
+      const request = reqRows[0] ? normalizeRideRequest(reqRows[0]) : null;
+      if (!request) throw new Error("Ride request not found.");
+      if (request.status !== "PENDING") {
+        throw new Error(`Ride request is already ${request.status}.`);
+      }
 
-    if (ride.driver_id !== actorId) {
-      throw new Error("Unauthorized: Only the ride host can reject requests.");
-    }
+      const rideRows = await tx
+        .select()
+        .from(schema.rides)
+        .where(eq(schema.rides.id, request.ride_id))
+        .for('update');
+      const ride = rideRows[0] ? normalizeRide(rideRows[0]) : null;
+      if (!ride) throw new Error("Associated ride not found.");
+      if (ride.organization_id !== request.organization_id) {
+        throw new Error("Tenant isolation violation: Request and ride belong to different organizations.");
+      }
 
-    const updatedRequest = RideRequestStateMachine.reject(request, reason);
-    await this.setRideRequest(updatedRequest);
+      if (ride.driver_id !== actorId) {
+        throw new Error("Unauthorized: Only the ride host can reject requests.");
+      }
+
+      const updatedRequest = RideRequestStateMachine.reject(request, reason);
+      await tx
+        .update(schema.rideRequests)
+        .set(toSqlDates(updatedRequest) as any)
+        .where(eq(schema.rideRequests.id, request.id));
+
+      return { request: updatedRequest, ride };
+    });
 
     await this.logAudit(
-      ride.organization_id,
+      result.ride.organization_id,
       actorId,
       "RIDE_REQUEST",
-      request.id,
+      result.request.id,
       "STATE_TRANSITION",
-      request.status,
-      updatedRequest.status,
+      "PENDING",
+      result.request.status,
       { rejection_reason: reason }
     );
 
     await this.dispatchNotification(
-      ride.organization_id,
-      request.passenger_id,
+      result.ride.organization_id,
+      result.request.passenger_id,
       "REQUEST_REJECTED",
       "Ride Request Declined",
       reason ? "Host declined: " + reason : "Host declined this request due to route detour.",
-      { ride_id: ride.id, request_id: request.id }
+      { ride_id: result.ride.id, request_id: result.request.id }
     );
 
-    return { request: updatedRequest, ride };
+    return result;
   }
 
   public async cancelRideRequest(requestId: UUID, actorId: UUID, reason?: string): Promise<{ request: RideRequest; ride: Ride }> {
-    const request = await this.getRideRequest(requestId);
-    if (!request) throw new Error("Ride request not found.");
+    const db = getDb();
+    if (!db) throw new Error("Database not initialized");
 
-    const ride = await this.getRide(request.ride_id);
-    if (!ride) throw new Error("Associated ride not found.");
+    const result = await withTransaction(async (tx) => {
+      const reqRows = await tx
+        .select()
+        .from(schema.rideRequests)
+        .where(eq(schema.rideRequests.id, requestId))
+        .for('update');
+      const request = reqRows[0] ? normalizeRideRequest(reqRows[0]) : null;
+      if (!request) throw new Error("Ride request not found.");
+      if (request.status !== "PENDING" && request.status !== "ACCEPTED") {
+        throw new Error(`Cannot cancel ride request in ${request.status} status.`);
+      }
 
-    if (request.passenger_id !== actorId && ride.driver_id !== actorId) {
-      throw new Error("Unauthorized: Only the passenger or driver can cancel this request.");
-    }
+      const rideRows = await tx
+        .select()
+        .from(schema.rides)
+        .where(eq(schema.rides.id, request.ride_id))
+        .for('update');
+      const ride = rideRows[0] ? normalizeRide(rideRows[0]) : null;
+      if (!ride) throw new Error("Associated ride not found.");
+      if (ride.organization_id !== request.organization_id) {
+        throw new Error("Tenant isolation violation: Request and ride belong to different organizations.");
+      }
 
-    const wasAccepted = request.status === "ACCEPTED";
-    const { updatedRequest, updatedRide } = RideRequestStateMachine.cancel(request, ride, reason);
+      if (request.passenger_id !== actorId && ride.driver_id !== actorId) {
+        throw new Error("Unauthorized: Only the passenger or driver can cancel this request.");
+      }
 
-    await this.setRide(updatedRide);
-    await this.setRideRequest(updatedRequest);
+      const wasAccepted = request.status === "ACCEPTED";
+      const { updatedRequest, updatedRide } = RideRequestStateMachine.cancel(request, ride, reason);
 
-    if (wasAccepted) {
-        const db = getDb();
-        if (db) {
-            await db.delete(schema.ridePassengers).where(eq(schema.ridePassengers.ride_request_id, request.id));
-        }
-    }
+      await tx
+        .update(schema.rides)
+        .set(toSqlDates(updatedRide) as any)
+        .where(eq(schema.rides.id, ride.id));
+
+      await tx
+        .update(schema.rideRequests)
+        .set(toSqlDates(updatedRequest) as any)
+        .where(eq(schema.rideRequests.id, request.id));
+
+      if (wasAccepted) {
+        await tx
+          .delete(schema.ridePassengers)
+          .where(eq(schema.ridePassengers.ride_request_id, request.id));
+      }
+
+      return { request: updatedRequest, ride: updatedRide, wasAccepted };
+    });
 
     await this.logAudit(
-      ride.organization_id,
+      result.ride.organization_id,
       actorId,
       "RIDE_REQUEST",
-      request.id,
+      result.request.id,
       "CANCEL",
-      request.status,
-      updatedRequest.status,
-      { cancellation_reason: reason, seats_restored: wasAccepted ? request.requested_seats : 0 }
+      result.wasAccepted ? "ACCEPTED" : "PENDING",
+      result.request.status,
+      { cancellation_reason: reason, seats_restored: result.wasAccepted ? result.request.requested_seats : 0 }
     );
 
-    const recipientId = actorId === request.passenger_id ? ride.driver_id : request.passenger_id;
+    const recipientId = actorId === result.request.passenger_id ? result.ride.driver_id : result.request.passenger_id;
     await this.dispatchNotification(
-      ride.organization_id,
+      result.ride.organization_id,
       recipientId,
       "REQUEST_CANCELLED",
       "Carpool Booking Cancelled",
       reason ? "Booking cancelled: " + reason : "A carpool seat booking was cancelled.",
-      { ride_id: ride.id, request_id: request.id }
+      { ride_id: result.ride.id, request_id: result.request.id }
     );
 
-    return { request: updatedRequest, ride: updatedRide };
+    return { request: result.request, ride: result.ride };
   }
 
   public async startRide(rideId: UUID, actorId: UUID): Promise<Ride> {
-    const ride = await this.getRide(rideId);
-    if (!ride) throw new Error("Ride not found.");
-    if (ride.driver_id !== actorId) throw new Error("Unauthorized.");
+    const db = getDb();
+    if (!db) throw new Error("Database not initialized");
 
-    const updatedRide = RideStateMachine.startRide(ride);
-    await this.setRide(updatedRide);
+    const result = await withTransaction(async (tx) => {
+      const rideRows = await tx
+        .select()
+        .from(schema.rides)
+        .where(eq(schema.rides.id, rideId))
+        .for('update');
+      const ride = rideRows[0] ? normalizeRide(rideRows[0]) : null;
+      if (!ride) throw new Error("Ride not found.");
+      if (ride.driver_id !== actorId) throw new Error("Unauthorized: Only the driver can start the ride.");
+      if (ride.status !== "SCHEDULED") throw new Error(`Cannot start ride in ${ride.status} status.`);
+
+      const updatedRide = RideStateMachine.startRide(ride);
+      await tx
+        .update(schema.rides)
+        .set(toSqlDates(updatedRide) as any)
+        .where(eq(schema.rides.id, ride.id));
+
+      const reqRows = await tx
+        .select()
+        .from(schema.rideRequests)
+        .where(and(eq(schema.rideRequests.ride_id, rideId), eq(schema.rideRequests.status, "ACCEPTED")));
+      const acceptedRequests = reqRows.map(normalizeRideRequest);
+
+      return { updatedRide, acceptedRequests };
+    });
 
     await this.logAudit(
-      ride.organization_id,
+      result.updatedRide.organization_id,
       actorId,
       "RIDE",
-      ride.id,
+      result.updatedRide.id,
       "STATE_TRANSITION",
-      ride.status,
-      updatedRide.status
+      "SCHEDULED",
+      result.updatedRide.status
     );
 
-    const allRequests = await this.getAllRideRequests();
-    const acceptedRequests = allRequests.filter(
-      (r) => r.ride_id === rideId && r.status === "ACCEPTED"
-    );
-
-    for (const req of acceptedRequests) {
+    for (const req of result.acceptedRequests) {
       await this.dispatchNotification(
-        ride.organization_id,
+        result.updatedRide.organization_id,
         req.passenger_id,
         "RIDE_STARTED",
         "Your Ride Has Started!",
         "Your driver has departed. Please be ready at your designated pickup point.",
-        { ride_id: ride.id }
+        { ride_id: result.updatedRide.id }
       );
     }
 
-    return updatedRide;
+    return result.updatedRide;
   }
 
   public async completeRide(rideId: UUID, actorId: UUID): Promise<Ride> {
-    const ride = await this.getRide(rideId);
-    if (!ride) throw new Error("Ride not found.");
-    if (ride.driver_id !== actorId) throw new Error("Unauthorized.");
+    const db = getDb();
+    if (!db) throw new Error("Database not initialized");
 
-    const updatedRide = RideStateMachine.completeRide(ride);
-    await this.setRide(updatedRide);
+    const updatedRide = await withTransaction(async (tx) => {
+      const rideRows = await tx
+        .select()
+        .from(schema.rides)
+        .where(eq(schema.rides.id, rideId))
+        .for('update');
+      const ride = rideRows[0] ? normalizeRide(rideRows[0]) : null;
+      if (!ride) throw new Error("Ride not found.");
+      if (ride.driver_id !== actorId) throw new Error("Unauthorized: Only the driver can complete the ride.");
+      if (ride.status !== "IN_PROGRESS") throw new Error(`Cannot complete ride in ${ride.status} status.`);
 
-    const allRequests = await this.getAllRideRequests();
-    for (const req of allRequests) {
-      if (req.ride_id === rideId && req.status === "ACCEPTED") {
-        const completedReq = RideRequestStateMachine.complete(req);
-        await this.setRideRequest(completedReq);
+      const uRide = RideStateMachine.completeRide(ride);
+      await tx
+        .update(schema.rides)
+        .set(toSqlDates(uRide) as any)
+        .where(eq(schema.rides.id, ride.id));
+
+      const reqRows = await tx
+        .select()
+        .from(schema.rideRequests)
+        .where(and(eq(schema.rideRequests.ride_id, rideId), eq(schema.rideRequests.status, "ACCEPTED")))
+        .for('update');
+
+      for (const rawReq of reqRows) {
+        const completedReq = RideRequestStateMachine.complete(normalizeRideRequest(rawReq));
+        await tx
+          .update(schema.rideRequests)
+          .set(toSqlDates(completedReq) as any)
+          .where(eq(schema.rideRequests.id, completedReq.id));
       }
-    }
+
+      return uRide;
+    });
 
     await this.logAudit(
-      ride.organization_id,
+      updatedRide.organization_id,
       actorId,
       "RIDE",
-      ride.id,
+      updatedRide.id,
       "STATE_TRANSITION",
-      ride.status,
+      "IN_PROGRESS",
       updatedRide.status
     );
 
@@ -945,46 +1011,79 @@ export class PostgresStore {
   }
 
   public async cancelRide(rideId: UUID, actorId: UUID, reason: string): Promise<Ride> {
-    const ride = await this.getRide(rideId);
-    if (!ride) throw new Error("Ride not found.");
-    if (ride.driver_id !== actorId) throw new Error("Unauthorized.");
+    const db = getDb();
+    if (!db) throw new Error("Database not initialized");
 
-    const updatedRide = RideStateMachine.cancelRide(ride, reason);
-    await this.setRide(updatedRide);
+    const result = await withTransaction(async (tx) => {
+      const rideRows = await tx
+        .select()
+        .from(schema.rides)
+        .where(eq(schema.rides.id, rideId))
+        .for('update');
+      const ride = rideRows[0] ? normalizeRide(rideRows[0]) : null;
+      if (!ride) throw new Error("Ride not found.");
+      if (ride.driver_id !== actorId) throw new Error("Unauthorized: Only the driver can cancel the ride.");
+      if (ride.status !== "SCHEDULED" && ride.status !== "IN_PROGRESS") {
+        throw new Error(`Cannot cancel ride in ${ride.status} status.`);
+      }
 
-    const allRequests = await this.getAllRideRequests();
-    for (const req of allRequests) {
-      if (req.ride_id === rideId && (req.status === "PENDING" || req.status === "ACCEPTED")) {
+      const updatedRide = RideStateMachine.cancelRide(ride, reason);
+      await tx
+        .update(schema.rides)
+        .set(toSqlDates(updatedRide) as any)
+        .where(eq(schema.rides.id, ride.id));
+
+      const reqRows = await tx
+        .select()
+        .from(schema.rideRequests)
+        .where(
+          and(
+            eq(schema.rideRequests.ride_id, rideId),
+            or(eq(schema.rideRequests.status, "PENDING"), eq(schema.rideRequests.status, "ACCEPTED"))
+          )
+        )
+        .for('update');
+
+      const notifiedRequests: RideRequest[] = [];
+      for (const rawReq of reqRows) {
         const { updatedRequest } = RideRequestStateMachine.cancel(
-          req,
+          normalizeRideRequest(rawReq),
           ride,
           "Driver cancelled trip: " + reason
         );
-        await this.setRideRequest(updatedRequest);
-
-        await this.dispatchNotification(
-          ride.organization_id,
-          req.passenger_id,
-          "RIDE_CANCELLED",
-          "Ride Cancelled by Host",
-          "The ride scheduled for " + new Date(ride.departure_time).toLocaleTimeString() + " was cancelled: " + reason,
-          { ride_id: ride.id }
-        );
+        await tx
+          .update(schema.rideRequests)
+          .set(toSqlDates(updatedRequest) as any)
+          .where(eq(schema.rideRequests.id, updatedRequest.id));
+        notifiedRequests.push(updatedRequest);
       }
+
+      return { updatedRide, notifiedRequests };
+    });
+
+    for (const req of result.notifiedRequests) {
+      await this.dispatchNotification(
+        result.updatedRide.organization_id,
+        req.passenger_id,
+        "RIDE_CANCELLED",
+        "Ride Cancelled by Host",
+        "The ride scheduled for " + new Date(result.updatedRide.departure_time).toLocaleTimeString() + " was cancelled: " + reason,
+        { ride_id: result.updatedRide.id }
+      );
     }
 
     await this.logAudit(
-      ride.organization_id,
+      result.updatedRide.organization_id,
       actorId,
       "RIDE",
-      ride.id,
+      result.updatedRide.id,
       "CANCEL",
-      ride.status,
-      updatedRide.status,
+      "SCHEDULED",
+      result.updatedRide.status,
       { cancelled_reason: reason }
     );
 
-    return updatedRide;
+    return result.updatedRide;
   }
 
   public async activateUserWithPessimisticLock(
@@ -1163,5 +1262,321 @@ export class PostgresStore {
 
       return { user: updatedUser, capabilities: userCap, notifiedAdminCount };
     });
+  }
+
+  public async createRideWithRoute(
+    ride: Ride,
+    route: RideRoute,
+    waypoints: RouteWaypoint[],
+    auditMetadata?: Record<string, unknown>
+  ): Promise<{ ride: Ride; route: RideRoute; waypoints: RouteWaypoint[] }> {
+    const db = getDb();
+    if (!db) throw new Error("Database not initialized");
+
+    await withTransaction(async (tx) => {
+      await tx.insert(schema.rides).values(toSqlDates(ride) as any);
+      await tx.insert(schema.rideRoutes).values(toSqlDates(route) as any);
+      if (waypoints.length > 0) {
+        for (const wp of waypoints) {
+          await tx.insert(schema.routeWaypoints).values(toSqlDates(wp) as any);
+        }
+      }
+      await tx.insert(schema.auditLogs).values({
+        id: crypto.randomUUID(),
+        organization_id: ride.organization_id,
+        actor_user_id: ride.driver_id,
+        entity_type: 'RIDE',
+        entity_id: ride.id,
+        action: 'CREATE',
+        from_state: 'DRAFT',
+        to_state: ride.status,
+        metadata_json: auditMetadata || null,
+        created_at: new Date(),
+      });
+    });
+
+    return { ride, route, waypoints };
+  }
+
+  public async expirePendingRequest(requestId: UUID): Promise<boolean> {
+    const db = getDb();
+    if (!db) throw new Error("Database not initialized");
+
+    const result = await withTransaction(async (tx) => {
+      const reqRows = await tx
+        .select()
+        .from(schema.rideRequests)
+        .where(eq(schema.rideRequests.id, requestId))
+        .for('update');
+      const request = reqRows[0] ? normalizeRideRequest(reqRows[0]) : null;
+      if (!request || request.status !== 'PENDING') return null;
+
+      const rideRows = await tx
+        .select()
+        .from(schema.rides)
+        .where(eq(schema.rides.id, request.ride_id))
+        .for('update');
+      const ride = rideRows[0] ? normalizeRide(rideRows[0]) : null;
+      if (!ride) return null;
+
+      const departureMs = new Date(ride.departure_time).getTime();
+      if (departureMs >= Date.now()) return null; // Not yet departed
+
+      const updatedRequest = RideRequestStateMachine.expire(request);
+      await tx
+        .update(schema.rideRequests)
+        .set(toSqlDates(updatedRequest) as any)
+        .where(eq(schema.rideRequests.id, request.id));
+
+      await tx.insert(schema.auditLogs).values({
+        id: crypto.randomUUID(),
+        organization_id: ride.organization_id,
+        actor_user_id: null,
+        entity_type: 'RIDE_REQUEST',
+        entity_id: request.id,
+        action: 'STATE_TRANSITION',
+        from_state: 'PENDING',
+        to_state: 'EXPIRED',
+        metadata_json: { reason: 'Auto-expired: Trip departure time passed without driver approval' },
+        created_at: new Date(),
+      });
+
+      return { request: updatedRequest, ride };
+    });
+
+    if (!result) return false;
+
+    await this.dispatchNotification(
+      result.ride.organization_id,
+      result.request.passenger_id,
+      'SYSTEM_ANNOUNCEMENT',
+      'Seat Request Expired',
+      'Your seat request has expired because the trip departed without being confirmed.',
+      { ride_id: result.ride.id, request_id: result.request.id }
+    );
+
+    return true;
+  }
+
+  public async autoCancelRide(rideId: UUID, reason: string): Promise<boolean> {
+    const db = getDb();
+    if (!db) throw new Error("Database not initialized");
+
+    const result = await withTransaction(async (tx) => {
+      const rideRows = await tx
+        .select()
+        .from(schema.rides)
+        .where(eq(schema.rides.id, rideId))
+        .for('update');
+      const ride = rideRows[0] ? normalizeRide(rideRows[0]) : null;
+      if (!ride || ride.status !== 'SCHEDULED') return null;
+
+      const updatedRide = RideStateMachine.cancelRide(ride, reason);
+      await tx
+        .update(schema.rides)
+        .set(toSqlDates(updatedRide) as any)
+        .where(eq(schema.rides.id, ride.id));
+
+      const reqRows = await tx
+        .select()
+        .from(schema.rideRequests)
+        .where(
+          and(
+            eq(schema.rideRequests.ride_id, rideId),
+            or(eq(schema.rideRequests.status, 'PENDING'), eq(schema.rideRequests.status, 'ACCEPTED'))
+          )
+        )
+        .for('update');
+
+      const cancelledRequests: RideRequest[] = [];
+      for (const rawReq of reqRows) {
+        const req = normalizeRideRequest(rawReq);
+        const { updatedRequest } = RideRequestStateMachine.cancel(req, ride, reason);
+        await tx
+          .update(schema.rideRequests)
+          .set(toSqlDates(updatedRequest) as any)
+          .where(eq(schema.rideRequests.id, req.id));
+
+        if (req.status === 'ACCEPTED') {
+          await tx
+            .delete(schema.ridePassengers)
+            .where(eq(schema.ridePassengers.ride_request_id, req.id));
+        }
+        cancelledRequests.push(updatedRequest);
+      }
+
+      await tx.insert(schema.auditLogs).values({
+        id: crypto.randomUUID(),
+        organization_id: ride.organization_id,
+        actor_user_id: null,
+        entity_type: 'RIDE',
+        entity_id: ride.id,
+        action: 'CANCEL',
+        from_state: 'SCHEDULED',
+        to_state: 'CANCELLED',
+        metadata_json: { reason },
+        created_at: new Date(),
+      });
+
+      return { ride: updatedRide, cancelledRequests };
+    });
+
+    if (!result) return false;
+
+    for (const req of result.cancelledRequests) {
+      await this.dispatchNotification(
+        result.ride.organization_id,
+        req.passenger_id,
+        'RIDE_CANCELLED',
+        'Carpool Cancelled by System',
+        'The carpool was automatically cancelled because the driver did not start the trip.',
+        { ride_id: result.ride.id }
+      );
+    }
+
+    await this.dispatchNotification(
+      result.ride.organization_id,
+      result.ride.driver_id,
+      'RIDE_CANCELLED',
+      'Trip Auto-Cancelled',
+      'Your scheduled carpool was marked cancelled because it was not started within 30 minutes of departure.',
+      { ride_id: result.ride.id }
+    );
+
+    return true;
+  }
+
+  public async acquireDistributedLock(lockId: number = 88291034): Promise<boolean> {
+    const db = getDb();
+    if (!db) return true;
+    try {
+      const res: any = await db.execute(sql`SELECT pg_try_advisory_lock(${lockId}) as acquired;`);
+      const rows = res.rows || res;
+      if (rows && rows[0]) {
+        return Boolean(rows[0].acquired);
+      }
+      return true;
+    } catch {
+      return true;
+    }
+  }
+
+  public async releaseDistributedLock(lockId: number = 88291034): Promise<boolean> {
+    const db = getDb();
+    if (!db) return true;
+    try {
+      const res: any = await db.execute(sql`SELECT pg_advisory_unlock(${lockId}) as released;`);
+      const rows = res.rows || res;
+      if (rows && rows[0]) {
+        return Boolean(rows[0].released);
+      }
+      return true;
+    } catch {
+      return true;
+    }
+  }
+
+  public async inviteUser(
+    user: User,
+    capability: UserCapability,
+    auditMetadata?: Record<string, unknown>
+  ): Promise<{ user: User; capability: UserCapability }> {
+    const db = getDb();
+    if (!db) throw new Error("Database not initialized");
+
+    await withTransaction(async (tx) => {
+      await tx.insert(schema.users).values(toSqlDates(user) as any);
+      await tx.insert(schema.userCapabilities).values(toSqlDates(capability) as any);
+      await tx.insert(schema.auditLogs).values({
+        id: crypto.randomUUID(),
+        organization_id: user.organization_id,
+        actor_user_id: null,
+        entity_type: 'USER',
+        entity_id: user.id,
+        action: 'CREATE',
+        from_state: undefined,
+        to_state: 'PENDING_VERIFICATION',
+        metadata_json: auditMetadata || null,
+        created_at: new Date(),
+      });
+    });
+
+    return { user, capability };
+  }
+
+  public async getRidesByOrganization(orgId: UUID): Promise<Ride[]> {
+    const db = getDb();
+    if (!db) throw new Error("Database not initialized");
+    const rows = await db.select().from(schema.rides).where(eq(schema.rides.organization_id, orgId));
+    return rows.map(normalizeRide);
+  }
+
+  public async getRideRequestsByOrganization(orgId: UUID): Promise<RideRequest[]> {
+    const db = getDb();
+    if (!db) throw new Error("Database not initialized");
+    const rows = await db.select().from(schema.rideRequests).where(eq(schema.rideRequests.organization_id, orgId));
+    return rows.map(normalizeRideRequest);
+  }
+
+  public async getUsersByOrganization(orgId: UUID): Promise<User[]> {
+    const db = getDb();
+    if (!db) throw new Error("Database not initialized");
+    const rows = await db.select().from(schema.users).where(eq(schema.users.organization_id, orgId));
+    return rows.map(fromSqlDates);
+  }
+
+  public async getVehiclesByOrganization(orgId: UUID): Promise<Vehicle[]> {
+    const db = getDb();
+    if (!db) throw new Error("Database not initialized");
+    const rows = await db.select().from(schema.vehicles).where(eq(schema.vehicles.organization_id, orgId));
+    return rows.map(normalizeVehicle);
+  }
+
+  public async getOrganizationRideMetrics(orgId: UUID): Promise<{
+    totalRides: number;
+    scheduledRides: number;
+    completedRides: number;
+    cancelledRides: number;
+    totalSeatsOffered: number;
+    availableSeats: number;
+    totalRequests: number;
+    acceptedRequests: number;
+  }> {
+    const db = getDb();
+    if (!db) throw new Error("Database not initialized");
+
+    const rideMetricsResult: any = await db.execute(sql`
+      SELECT
+        COUNT(*)::int AS total_rides,
+        COUNT(*) FILTER (WHERE status = 'SCHEDULED')::int AS scheduled_rides,
+        COUNT(*) FILTER (WHERE status = 'COMPLETED')::int AS completed_rides,
+        COUNT(*) FILTER (WHERE status = 'CANCELLED')::int AS cancelled_rides,
+        COALESCE(SUM(total_seats_offered), 0)::int AS total_seats_offered,
+        COALESCE(SUM(available_seats), 0)::int AS available_seats
+      FROM rides
+      WHERE organization_id = ${orgId};
+    `);
+
+    const reqMetricsResult: any = await db.execute(sql`
+      SELECT
+        COUNT(*)::int AS total_requests,
+        COUNT(*) FILTER (WHERE status = 'ACCEPTED')::int AS accepted_requests
+      FROM ride_requests
+      WHERE organization_id = ${orgId};
+    `);
+
+    const rideRow = (rideMetricsResult.rows || rideMetricsResult)[0] || {};
+    const reqRow = (reqMetricsResult.rows || reqMetricsResult)[0] || {};
+
+    return {
+      totalRides: Number(rideRow.total_rides) || 0,
+      scheduledRides: Number(rideRow.scheduled_rides) || 0,
+      completedRides: Number(rideRow.completed_rides) || 0,
+      cancelledRides: Number(rideRow.cancelled_rides) || 0,
+      totalSeatsOffered: Number(rideRow.total_seats_offered) || 0,
+      availableSeats: Number(rideRow.available_seats) || 0,
+      totalRequests: Number(reqRow.total_requests) || 0,
+      acceptedRequests: Number(reqRow.accepted_requests) || 0,
+    };
   }
 }

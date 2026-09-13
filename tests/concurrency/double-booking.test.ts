@@ -1,20 +1,28 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { IDataRepository } from '../../src/services/repository.interface';
 import { getRepository } from '../../src/services/repository-factory';
+import { PostgresStore } from '../../src/services/postgres-store';
+import { DataStore } from '../../src/services/data-store';
 import { Ride, RideRequest } from '../../src/domain/types';
-import { setupTestRepository, ORG_ID, ALEX_ID } from '../helpers/seed-fixture';
+import { setupTestRepository, setupDatabaseTestRepository, ORG_ID, ALEX_ID } from '../helpers/seed-fixture';
 
 describe('Gate 2: Concurrency & Double-Booking Prevention', () => {
   let store: IDataRepository;
 
   beforeEach(async () => {
     if (process.env.DATABASE_URL) {
-      await setupTestRepository();
-      store = getRepository();
+      store = await setupDatabaseTestRepository();
+      // Assert that we are strictly running against real PostgreSQL/PGlite
+      expect(store).toBeInstanceOf(PostgresStore);
+      if (store instanceof DataStore) {
+        throw new Error('FATAL: Test running with DATABASE_URL must use PostgresStore, but DataStore was injected!');
+      }
+    } else {
+      store = setupTestRepository();
     }
   });
 
-  it.skipIf(!process.env.DATABASE_URL)('prevents double-booking when 10 concurrent requests attempt to claim the last 1 remaining seat', async () => {
+  it('prevents double-booking when 10 concurrent requests attempt to claim the last 1 remaining seat', async () => {
     const rideId = crypto.randomUUID();
 
     // Ride with EXACTLY 1 available seat

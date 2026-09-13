@@ -109,9 +109,117 @@ export function makeSeedStore(): DataStore {
   return store;
 }
 
-/** Creates a fresh seeded store, injects it via setRepository(), and returns it. */
+import { readFileSync, existsSync } from 'node:fs';
+import { resolve, join } from 'node:path';
+import { getDb, isPgliteUrl, getPglite } from '../../src/infrastructure/db/client';
+import { PostgresStore } from '../../src/services/postgres-store';
+import { sql } from 'drizzle-orm';
+import type { IDataRepository } from '../../src/services/repository.interface';
+
+/**
+ * Sets up a real PostgreSQL or PGlite database:
+ * 1. Runs all SQL migrations in order from migrations/_journal.json.
+ * 2. Clears existing data.
+ * 3. Seeds the canonical Acme Corp dataset using PostgresStore.
+ * 4. Injects PostgresStore into the repository factory.
+ */
+export async function setupDatabaseTestRepository(): Promise<PostgresStore> {
+  const db = getDb();
+  if (!db) {
+    throw new Error('Database connection failed for DATABASE_URL: ' + process.env.DATABASE_URL);
+  }
+
+  const repoRoot = process.cwd();
+  const migrationsFolder = join(repoRoot, 'migrations');
+  const journalPath = join(migrationsFolder, 'meta', '_journal.json');
+
+  if (existsSync(journalPath)) {
+    const journal = JSON.parse(readFileSync(journalPath, 'utf8'));
+    const pglite = getPglite();
+    for (const entry of journal.entries) {
+      const sqlFile = join(migrationsFolder, `${entry.tag}.sql`);
+      if (existsSync(sqlFile)) {
+        let content = readFileSync(sqlFile, 'utf8');
+        if (isPgliteUrl(process.env.DATABASE_URL)) {
+          content = content.replace(/CREATE EXTENSION[^\n;]+;/gi, '-- $&');
+        }
+        try {
+          if (pglite) {
+            await pglite.exec(content);
+          } else {
+            await db.execute(sql.raw(content));
+          }
+        } catch (e: any) {
+          if (!e.message?.includes('already exists')) {
+            console.warn(`Migration notice on ${entry.tag}:`, e.message);
+          }
+        }
+      }
+    }
+  }
+
+  // Clear existing rows
+  try {
+    const pglite = getPglite();
+    const cleanSql = `
+      DELETE FROM ride_passengers;
+      DELETE FROM ride_requests;
+      DELETE FROM route_waypoints;
+      DELETE FROM ride_routes;
+      DELETE FROM rides;
+      DELETE FROM vehicles;
+      DELETE FROM user_capabilities;
+      DELETE FROM users;
+      DELETE FROM organizations;
+      DELETE FROM rate_limits;
+    `;
+    if (pglite) {
+      await pglite.exec(cleanSql);
+    } else {
+      await db.execute(sql.raw(cleanSql));
+    }
+  } catch {
+    // Tables may be empty initially
+  }
+
+  const pgStore = PostgresStore.getInstance();
+  setRepository(pgStore);
+
+  // Seed canonical test data directly into Postgres
+  const seedStore = makeSeedStore();
+
+  for (const org of seedStore.organizations.values()) {
+    await pgStore.setOrganization(org);
+  }
+  for (const user of seedStore.users.values()) {
+    await pgStore.setUser(user);
+  }
+  for (const cap of seedStore.userCapabilities.values()) {
+    await pgStore.setUserCapability(cap);
+  }
+  for (const veh of seedStore.vehicles.values()) {
+    await pgStore.setVehicle(veh);
+  }
+  for (const ride of seedStore.rides.values()) {
+    await pgStore.setRide(ride);
+  }
+  for (const route of seedStore.rideRoutes.values()) {
+    await pgStore.setRideRoute(route);
+  }
+  for (const wp of seedStore.routeWaypoints.values()) {
+    await pgStore.setRouteWaypoint(wp);
+  }
+  for (const req of seedStore.rideRequests.values()) {
+    await pgStore.setRideRequest(req);
+  }
+
+  return pgStore;
+}
+
+/** Creates a fresh seeded in-memory store, injects it via setRepository(), and returns it. */
 export function setupTestRepository(): DataStore {
   const store = makeSeedStore();
   setRepository(store);
   return store;
 }
+

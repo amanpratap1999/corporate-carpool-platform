@@ -152,8 +152,8 @@ export function parseTimestampParam(
       const ms = parseLocalTimeToUtcMs(baseDate, trimmed, timeZone);
       if (ms !== null) return ms;
     }
-    const d = new Date(`${baseDate}T${trimmed.padStart(5, '0')}:00Z`);
-    return isNaN(d.getTime()) ? null : d.getTime();
+    // Bare local times without timeZone cannot be reliably parsed; do not assume UTC
+    return null;
   }
 
   const fallback = new Date(trimmed);

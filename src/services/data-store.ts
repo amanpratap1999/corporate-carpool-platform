@@ -81,6 +81,15 @@ export class DataStore implements IDataRepository {
   async setOrganization(item: Organization): Promise<void> { this.organizations.set(item.id, item); }
 
   async getUser(id: UUID): Promise<User | undefined> { return this.users.get(id); }
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const normalized = email.toLowerCase().trim();
+    for (const u of this.users.values()) {
+      if (u.email.toLowerCase().trim() === normalized) {
+        return u;
+      }
+    }
+    return undefined;
+  }
   async getAllUsers(): Promise<User[]> { return Array.from(this.users.values()); }
   async setUser(item: User): Promise<void> { this.users.set(item.id, item); }
 
@@ -337,200 +346,188 @@ export class DataStore implements IDataRepository {
     }
   }
 
-  public async acceptRideRequest(requestId: UUID, actorId: UUID): Promise<{ request: RideRequest; ride: Ride }> {
-    const request = this.rideRequests.get(requestId);
-    if (!request) throw new Error('Ride request not found.');
-
-    const ride = this.rides.get(request.ride_id);
-    if (!ride) throw new Error('Associated ride not found.');
-
-    if (ride.driver_id !== actorId) {
-      throw new Error('Unauthorized: Only the ride host can approve requests.');
-    }
-
-    const { updatedRequest, updatedRide } = RideRequestStateMachine.accept(request, ride);
-
-    this.rides.set(updatedRide.id, updatedRide);
-    this.rideRequests.set(updatedRequest.id, updatedRequest);
-
-    const passengerEntry: RidePassenger = {
-      id: crypto.randomUUID(),
-      organization_id: ride.organization_id,
-      ride_id: ride.id,
-      ride_request_id: request.id,
-      passenger_id: request.passenger_id,
-      seats_booked: request.requested_seats,
-      created_at: new Date().toISOString(),
-    };
-    this.ridePassengers.set(passengerEntry.id, passengerEntry);
-
-    void this.logAudit(
-      ride.organization_id, actorId, 'RIDE_REQUEST', request.id, 'STATE_TRANSITION',
-      request.status, updatedRequest.status,
-      { seats_booked: request.requested_seats, remaining_seats: updatedRide.available_seats }
-    );
-
-    void this.dispatchNotification(
-      ride.organization_id, request.passenger_id, 'REQUEST_ACCEPTED',
-      'Ride Request Confirmed!',
-      `Your host has confirmed your seat for the commute on ${new Date(ride.departure_time).toLocaleDateString()}.`,
-      { ride_id: ride.id, request_id: request.id }
-    );
-
-    return { request: updatedRequest, ride: updatedRide };
-  }
-
   public async rejectRideRequest(requestId: UUID, actorId: UUID, reason?: string): Promise<{ request: RideRequest; ride: Ride }> {
-    const request = this.rideRequests.get(requestId);
-    if (!request) throw new Error('Ride request not found.');
+    const rawReq = this.rideRequests.get(requestId);
+    if (!rawReq) throw new Error('Ride request not found.');
 
-    const ride = this.rides.get(request.ride_id);
-    if (!ride) throw new Error('Associated ride not found.');
+    const release = await this.acquireLock(`ride:${rawReq.ride_id}`);
+    try {
+      const request = this.rideRequests.get(requestId);
+      if (!request) throw new Error('Ride request not found.');
 
-    if (ride.driver_id !== actorId) {
-      throw new Error('Unauthorized: Only the ride host can reject requests.');
+      const ride = this.rides.get(request.ride_id);
+      if (!ride) throw new Error('Associated ride not found.');
+
+      if (ride.driver_id !== actorId) {
+        throw new Error('Unauthorized: Only the ride host can reject requests.');
+      }
+
+      const updatedRequest = RideRequestStateMachine.reject(request, reason);
+      this.rideRequests.set(updatedRequest.id, updatedRequest);
+
+      void this.logAudit(
+        ride.organization_id, actorId, 'RIDE_REQUEST', request.id, 'STATE_TRANSITION',
+        request.status, updatedRequest.status, { rejection_reason: reason }
+      );
+
+      void this.dispatchNotification(
+        ride.organization_id, request.passenger_id, 'REQUEST_REJECTED',
+        'Ride Request Declined',
+        reason ? `Host declined: ${reason}` : 'Host declined this request due to route detour.',
+        { ride_id: ride.id, request_id: request.id }
+      );
+
+      return { request: updatedRequest, ride };
+    } finally {
+      release();
     }
-
-    const updatedRequest = RideRequestStateMachine.reject(request, reason);
-    this.rideRequests.set(updatedRequest.id, updatedRequest);
-
-    void this.logAudit(
-      ride.organization_id, actorId, 'RIDE_REQUEST', request.id, 'STATE_TRANSITION',
-      request.status, updatedRequest.status, { rejection_reason: reason }
-    );
-
-    void this.dispatchNotification(
-      ride.organization_id, request.passenger_id, 'REQUEST_REJECTED',
-      'Ride Request Declined',
-      reason ? `Host declined: ${reason}` : 'Host declined this request due to route detour.',
-      { ride_id: ride.id, request_id: request.id }
-    );
-
-    return { request: updatedRequest, ride };
   }
 
   public async cancelRideRequest(requestId: UUID, actorId: UUID, reason?: string): Promise<{ request: RideRequest; ride: Ride }> {
-    const request = this.rideRequests.get(requestId);
-    if (!request) throw new Error('Ride request not found.');
+    const rawReq = this.rideRequests.get(requestId);
+    if (!rawReq) throw new Error('Ride request not found.');
 
-    const ride = this.rides.get(request.ride_id);
-    if (!ride) throw new Error('Associated ride not found.');
+    const release = await this.acquireLock(`ride:${rawReq.ride_id}`);
+    try {
+      const request = this.rideRequests.get(requestId);
+      if (!request) throw new Error('Ride request not found.');
 
-    if (request.passenger_id !== actorId && ride.driver_id !== actorId) {
-      throw new Error('Unauthorized: Only the passenger or driver can cancel this request.');
-    }
+      const ride = this.rides.get(request.ride_id);
+      if (!ride) throw new Error('Associated ride not found.');
 
-    const wasAccepted = request.status === 'ACCEPTED';
-    const { updatedRequest, updatedRide } = RideRequestStateMachine.cancel(request, ride, reason);
+      if (request.passenger_id !== actorId && ride.driver_id !== actorId) {
+        throw new Error('Unauthorized: Only the passenger or driver can cancel this request.');
+      }
 
-    this.rides.set(updatedRide.id, updatedRide);
-    this.rideRequests.set(updatedRequest.id, updatedRequest);
+      const wasAccepted = request.status === 'ACCEPTED';
+      const { updatedRequest, updatedRide } = RideRequestStateMachine.cancel(request, ride, reason);
 
-    if (wasAccepted) {
-      for (const [key, p] of this.ridePassengers.entries()) {
-        if (p.ride_request_id === request.id) {
-          this.ridePassengers.delete(key);
+      this.rides.set(updatedRide.id, updatedRide);
+      this.rideRequests.set(updatedRequest.id, updatedRequest);
+
+      if (wasAccepted) {
+        for (const [key, p] of this.ridePassengers.entries()) {
+          if (p.ride_request_id === request.id) {
+            this.ridePassengers.delete(key);
+          }
         }
       }
+
+      void this.logAudit(
+        ride.organization_id, actorId, 'RIDE_REQUEST', request.id, 'CANCEL',
+        request.status, updatedRequest.status,
+        { cancellation_reason: reason, seats_restored: wasAccepted ? request.requested_seats : 0 }
+      );
+
+      const recipientId = actorId === request.passenger_id ? ride.driver_id : request.passenger_id;
+      void this.dispatchNotification(
+        ride.organization_id, recipientId, 'REQUEST_CANCELLED',
+        'Carpool Booking Cancelled',
+        reason ? `Booking cancelled: ${reason}` : 'A carpool seat booking was cancelled.',
+        { ride_id: ride.id, request_id: request.id }
+      );
+
+      return { request: updatedRequest, ride: updatedRide };
+    } finally {
+      release();
     }
-
-    void this.logAudit(
-      ride.organization_id, actorId, 'RIDE_REQUEST', request.id, 'CANCEL',
-      request.status, updatedRequest.status,
-      { cancellation_reason: reason, seats_restored: wasAccepted ? request.requested_seats : 0 }
-    );
-
-    const recipientId = actorId === request.passenger_id ? ride.driver_id : request.passenger_id;
-    void this.dispatchNotification(
-      ride.organization_id, recipientId, 'REQUEST_CANCELLED',
-      'Carpool Booking Cancelled',
-      reason ? `Booking cancelled: ${reason}` : 'A carpool seat booking was cancelled.',
-      { ride_id: ride.id, request_id: request.id }
-    );
-
-    return { request: updatedRequest, ride: updatedRide };
   }
 
   public async startRide(rideId: UUID, actorId: UUID): Promise<Ride> {
-    const ride = this.rides.get(rideId);
-    if (!ride) throw new Error('Ride not found.');
-    if (ride.driver_id !== actorId) throw new Error('Unauthorized.');
+    const release = await this.acquireLock(`ride:${rideId}`);
+    try {
+      const ride = this.rides.get(rideId);
+      if (!ride) throw new Error('Ride not found.');
+      if (ride.driver_id !== actorId) throw new Error('Unauthorized.');
 
-    const updatedRide = RideStateMachine.startRide(ride);
-    this.rides.set(updatedRide.id, updatedRide);
+      const updatedRide = RideStateMachine.startRide(ride);
+      this.rides.set(updatedRide.id, updatedRide);
 
-    void this.logAudit(
-      ride.organization_id, actorId, 'RIDE', ride.id, 'STATE_TRANSITION',
-      ride.status, updatedRide.status
-    );
-
-    const acceptedRequests = Array.from(this.rideRequests.values()).filter(
-      (r) => r.ride_id === rideId && r.status === 'ACCEPTED'
-    );
-
-    for (const req of acceptedRequests) {
-      void this.dispatchNotification(
-        ride.organization_id, req.passenger_id, 'RIDE_STARTED',
-        'Your Ride Has Started!',
-        'Your driver has departed. Please be ready at your designated pickup point.',
-        { ride_id: ride.id }
+      void this.logAudit(
+        ride.organization_id, actorId, 'RIDE', ride.id, 'STATE_TRANSITION',
+        ride.status, updatedRide.status
       );
-    }
 
-    return updatedRide;
-  }
+      const acceptedRequests = Array.from(this.rideRequests.values()).filter(
+        (r) => r.ride_id === rideId && r.status === 'ACCEPTED'
+      );
 
-  public async completeRide(rideId: UUID, actorId: UUID): Promise<Ride> {
-    const ride = this.rides.get(rideId);
-    if (!ride) throw new Error('Ride not found.');
-    if (ride.driver_id !== actorId) throw new Error('Unauthorized.');
-
-    const updatedRide = RideStateMachine.completeRide(ride);
-    this.rides.set(updatedRide.id, updatedRide);
-
-    for (const req of this.rideRequests.values()) {
-      if (req.ride_id === rideId && req.status === 'ACCEPTED') {
-        const completedReq = RideRequestStateMachine.complete(req);
-        this.rideRequests.set(completedReq.id, completedReq);
-      }
-    }
-
-    void this.logAudit(
-      ride.organization_id, actorId, 'RIDE', ride.id, 'STATE_TRANSITION',
-      ride.status, updatedRide.status
-    );
-
-    return updatedRide;
-  }
-
-  public async cancelRide(rideId: UUID, actorId: UUID, reason: string): Promise<Ride> {
-    const ride = this.rides.get(rideId);
-    if (!ride) throw new Error('Ride not found.');
-    if (ride.driver_id !== actorId) throw new Error('Unauthorized.');
-
-    const updatedRide = RideStateMachine.cancelRide(ride, reason);
-    this.rides.set(updatedRide.id, updatedRide);
-
-    for (const req of this.rideRequests.values()) {
-      if (req.ride_id === rideId && (req.status === 'PENDING' || req.status === 'ACCEPTED')) {
-        const { updatedRequest } = RideRequestStateMachine.cancel(req, ride, `Driver cancelled trip: ${reason}`);
-        this.rideRequests.set(updatedRequest.id, updatedRequest);
-
+      for (const req of acceptedRequests) {
         void this.dispatchNotification(
-          ride.organization_id, req.passenger_id, 'RIDE_CANCELLED',
-          'Ride Cancelled by Host',
-          `The ride scheduled for ${new Date(ride.departure_time).toLocaleTimeString()} was cancelled: ${reason}`,
+          ride.organization_id, req.passenger_id, 'RIDE_STARTED',
+          'Your Ride Has Started!',
+          'Your driver has departed. Please be ready at your designated pickup point.',
           { ride_id: ride.id }
         );
       }
+
+      return updatedRide;
+    } finally {
+      release();
     }
+  }
 
-    void this.logAudit(
-      ride.organization_id, actorId, 'RIDE', ride.id, 'CANCEL',
-      ride.status, updatedRide.status, { cancelled_reason: reason }
-    );
+  public async completeRide(rideId: UUID, actorId: UUID): Promise<Ride> {
+    const release = await this.acquireLock(`ride:${rideId}`);
+    try {
+      const ride = this.rides.get(rideId);
+      if (!ride) throw new Error('Ride not found.');
+      if (ride.driver_id !== actorId) throw new Error('Unauthorized.');
 
-    return updatedRide;
+      const updatedRide = RideStateMachine.completeRide(ride);
+      this.rides.set(updatedRide.id, updatedRide);
+
+      for (const req of this.rideRequests.values()) {
+        if (req.ride_id === rideId && req.status === 'ACCEPTED') {
+          const completedReq = RideRequestStateMachine.complete(req);
+          this.rideRequests.set(completedReq.id, completedReq);
+        }
+      }
+
+      void this.logAudit(
+        ride.organization_id, actorId, 'RIDE', ride.id, 'STATE_TRANSITION',
+        ride.status, updatedRide.status
+      );
+
+      return updatedRide;
+    } finally {
+      release();
+    }
+  }
+
+  public async cancelRide(rideId: UUID, actorId: UUID, reason: string): Promise<Ride> {
+    const release = await this.acquireLock(`ride:${rideId}`);
+    try {
+      const ride = this.rides.get(rideId);
+      if (!ride) throw new Error('Ride not found.');
+      if (ride.driver_id !== actorId) throw new Error('Unauthorized.');
+
+      const updatedRide = RideStateMachine.cancelRide(ride, reason);
+      this.rides.set(updatedRide.id, updatedRide);
+
+      for (const req of this.rideRequests.values()) {
+        if (req.ride_id === rideId && (req.status === 'PENDING' || req.status === 'ACCEPTED')) {
+          const { updatedRequest } = RideRequestStateMachine.cancel(req, ride, `Driver cancelled trip: ${reason}`);
+          this.rideRequests.set(updatedRequest.id, updatedRequest);
+
+          void this.dispatchNotification(
+            ride.organization_id, req.passenger_id, 'RIDE_CANCELLED',
+            'Ride Cancelled by Host',
+            `The ride scheduled for ${new Date(ride.departure_time).toLocaleTimeString()} was cancelled: ${reason}`,
+            { ride_id: ride.id }
+          );
+        }
+      }
+
+      void this.logAudit(
+        ride.organization_id, actorId, 'RIDE', ride.id, 'CANCEL',
+        ride.status, updatedRide.status, { cancelled_reason: reason }
+      );
+
+      return updatedRide;
+    } finally {
+      release();
+    }
   }
 
   public async activateUserWithPessimisticLock(
@@ -633,5 +630,227 @@ export class DataStore implements IDataRepository {
     } finally {
       release();
     }
+  }
+
+  public async createRideWithRoute(
+    ride: Ride,
+    route: RideRoute,
+    waypoints: RouteWaypoint[],
+    auditMetadata?: Record<string, unknown>
+  ): Promise<{ ride: Ride; route: RideRoute; waypoints: RouteWaypoint[] }> {
+    const release = await this.acquireLock(`ride:${ride.id}`);
+    try {
+      this.rides.set(ride.id, ride);
+      this.rideRoutes.set(route.id, route);
+      for (const wp of waypoints) {
+        this.routeWaypoints.set(wp.id, wp);
+      }
+      this.auditLogs.push({
+        id: crypto.randomUUID(),
+        organization_id: ride.organization_id,
+        actor_user_id: ride.driver_id,
+        entity_type: 'RIDE',
+        entity_id: ride.id,
+        action: 'CREATE',
+        from_state: 'DRAFT',
+        to_state: ride.status,
+        metadata_json: auditMetadata || {},
+        created_at: new Date().toISOString(),
+      });
+      return { ride, route, waypoints };
+    } finally {
+      release();
+    }
+  }
+
+  public async expirePendingRequest(requestId: UUID): Promise<boolean> {
+    const release = await this.acquireLock(`request:${requestId}`);
+    try {
+      const request = this.rideRequests.get(requestId);
+      if (!request || request.status !== 'PENDING') return false;
+
+      const ride = this.rides.get(request.ride_id);
+      if (!ride) return false;
+
+      const departureMs = new Date(ride.departure_time).getTime();
+      if (departureMs >= Date.now()) return false;
+
+      const updatedRequest = RideRequestStateMachine.expire(request);
+      this.rideRequests.set(updatedRequest.id, updatedRequest);
+
+      this.auditLogs.push({
+        id: crypto.randomUUID(),
+        organization_id: ride.organization_id,
+        entity_type: 'RIDE_REQUEST',
+        entity_id: request.id,
+        action: 'STATE_TRANSITION',
+        from_state: 'PENDING',
+        to_state: 'EXPIRED',
+        metadata_json: { reason: 'Auto-expired: Trip departure time passed without driver approval' },
+        created_at: new Date().toISOString(),
+      });
+
+      void this.dispatchNotification(
+        ride.organization_id,
+        request.passenger_id,
+        'SYSTEM_ANNOUNCEMENT',
+        'Seat Request Expired',
+        'Your seat request has expired because the trip departed without being confirmed.',
+        { ride_id: ride.id, request_id: request.id }
+      );
+
+      return true;
+    } finally {
+      release();
+    }
+  }
+
+  public async autoCancelRide(rideId: UUID, reason: string): Promise<boolean> {
+    const release = await this.acquireLock(`ride:${rideId}`);
+    try {
+      const ride = this.rides.get(rideId);
+      if (!ride || ride.status !== 'SCHEDULED') return false;
+
+      const updatedRide = RideStateMachine.cancelRide(ride, reason);
+      this.rides.set(updatedRide.id, updatedRide);
+
+      const cancelledRequests: RideRequest[] = [];
+      for (const req of this.rideRequests.values()) {
+        if (req.ride_id === rideId && (req.status === 'PENDING' || req.status === 'ACCEPTED')) {
+          const { updatedRequest } = RideRequestStateMachine.cancel(req, ride, reason);
+          this.rideRequests.set(updatedRequest.id, updatedRequest);
+
+          if (req.status === 'ACCEPTED') {
+            for (const [pId, p] of this.ridePassengers.entries()) {
+              if (p.ride_request_id === req.id) {
+                this.ridePassengers.delete(pId);
+              }
+            }
+          }
+          cancelledRequests.push(updatedRequest);
+        }
+      }
+
+      this.auditLogs.push({
+        id: crypto.randomUUID(),
+        organization_id: ride.organization_id,
+        entity_type: 'RIDE',
+        entity_id: ride.id,
+        action: 'CANCEL',
+        from_state: 'SCHEDULED',
+        to_state: 'CANCELLED',
+        metadata_json: { reason },
+        created_at: new Date().toISOString(),
+      });
+
+      for (const req of cancelledRequests) {
+        void this.dispatchNotification(
+          ride.organization_id,
+          req.passenger_id,
+          'RIDE_CANCELLED',
+          'Carpool Cancelled by System',
+          'The carpool was automatically cancelled because the driver did not start the trip.',
+          { ride_id: ride.id }
+        );
+      }
+
+      void this.dispatchNotification(
+        ride.organization_id,
+        ride.driver_id,
+        'RIDE_CANCELLED',
+        'Trip Auto-Cancelled',
+        'Your scheduled carpool was marked cancelled because it was not started within 30 minutes of departure.',
+        { ride_id: ride.id }
+      );
+
+      return true;
+    } finally {
+      release();
+    }
+  }
+
+  private distributedLocks: Set<number> = new Set();
+  public async acquireDistributedLock(lockId: number = 88291034): Promise<boolean> {
+    if (this.distributedLocks.has(lockId)) return false;
+    this.distributedLocks.add(lockId);
+    return true;
+  }
+
+  public async releaseDistributedLock(lockId: number = 88291034): Promise<boolean> {
+    this.distributedLocks.delete(lockId);
+    return true;
+  }
+
+  public async inviteUser(
+    user: User,
+    capability: UserCapability,
+    auditMetadata?: Record<string, unknown>
+  ): Promise<{ user: User; capability: UserCapability }> {
+    const release = await this.acquireLock(`user:${user.email.toLowerCase().trim()}`);
+    try {
+      this.users.set(user.id, user);
+      this.userCapabilities.set(capability.user_id, capability);
+      this.auditLogs.push({
+        id: crypto.randomUUID(),
+        organization_id: user.organization_id,
+        entity_type: 'USER',
+        entity_id: user.id,
+        action: 'CREATE',
+        to_state: 'PENDING_VERIFICATION',
+        metadata_json: auditMetadata || {},
+        created_at: new Date().toISOString(),
+      });
+      return { user, capability };
+    } finally {
+      release();
+    }
+  }
+
+  public async getRidesByOrganization(orgId: UUID): Promise<Ride[]> {
+    return Array.from(this.rides.values()).filter((r) => r.organization_id === orgId);
+  }
+
+  public async getRideRequestsByOrganization(orgId: UUID): Promise<RideRequest[]> {
+    return Array.from(this.rideRequests.values()).filter((r) => r.organization_id === orgId);
+  }
+
+  public async getUsersByOrganization(orgId: UUID): Promise<User[]> {
+    return Array.from(this.users.values()).filter((u) => u.organization_id === orgId);
+  }
+
+  public async getVehiclesByOrganization(orgId: UUID): Promise<Vehicle[]> {
+    return Array.from(this.vehicles.values()).filter((v) => v.organization_id === orgId);
+  }
+
+  public async getOrganizationRideMetrics(orgId: UUID): Promise<{
+    totalRides: number;
+    scheduledRides: number;
+    completedRides: number;
+    cancelledRides: number;
+    totalSeatsOffered: number;
+    availableSeats: number;
+    totalRequests: number;
+    acceptedRequests: number;
+  }> {
+    const rides = Array.from(this.rides.values()).filter((r) => r.organization_id === orgId);
+    const requests = Array.from(this.rideRequests.values()).filter((r) => r.organization_id === orgId);
+
+    let totalSeatsOffered = 0;
+    let availableSeats = 0;
+    for (const r of rides) {
+      totalSeatsOffered += Number(r.total_seats_offered) || 0;
+      availableSeats += Number(r.available_seats) || 0;
+    }
+
+    return {
+      totalRides: rides.length,
+      scheduledRides: rides.filter((r) => r.status === 'SCHEDULED').length,
+      completedRides: rides.filter((r) => r.status === 'COMPLETED').length,
+      cancelledRides: rides.filter((r) => r.status === 'CANCELLED').length,
+      totalSeatsOffered,
+      availableSeats,
+      totalRequests: requests.length,
+      acceptedRequests: requests.filter((r) => r.status === 'ACCEPTED').length,
+    };
   }
 }

@@ -1,0 +1,894 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Database Schema & Entity Relationships — Corporate Carpooling Platform</title>
+<style>
+  @page {
+    size: A4 portrait;
+    margin: 18mm 14mm 18mm 14mm;
+    @top-left {
+      content: "Corporate Carpooling Platform";
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 8pt;
+      color: #64748b;
+    }
+    @top-right {
+      content: "Database Architecture & ER Specification";
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 8pt;
+      color: #64748b;
+    }
+    @bottom-center {
+      content: "Page " counter(page) " of " counter(pages);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 8pt;
+      color: #64748b;
+    }
+  }
+
+  *, *::before, *::after {
+    box-sizing: border-box;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #0f172a;
+    background: #ffffff;
+    font-size: 9.5pt;
+    line-height: 1.5;
+    margin: 0;
+    padding: 0;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .page-break {
+    page-break-before: always;
+    break-before: page;
+  }
+
+  .no-break {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Cover Header */
+  .cover {
+    padding: 24px 0 20px 0;
+    border-bottom: 2px solid #0284c7;
+    margin-bottom: 24px;
+  }
+  .doc-badge {
+    display: inline-block;
+    background: #0284c7;
+    color: #ffffff;
+    font-size: 8pt;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    padding: 3px 10px;
+    border-radius: 4px;
+    margin-bottom: 12px;
+  }
+  h1.doc-title {
+    font-size: 22pt;
+    font-weight: 800;
+    color: #0f172a;
+    line-height: 1.2;
+    margin: 0 0 8px 0;
+    letter-spacing: -0.5px;
+  }
+  .doc-subtitle {
+    font-size: 11pt;
+    color: #475569;
+    margin-bottom: 14px;
+  }
+  .meta-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 8.5pt;
+  }
+  .meta-item strong {
+    display: block;
+    color: #64748b;
+    font-size: 7.5pt;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 2px;
+  }
+
+  /* Typography */
+  h2 {
+    font-size: 13.5pt;
+    font-weight: 700;
+    color: #0f172a;
+    border-bottom: 1.5px solid #e2e8f0;
+    padding-bottom: 5px;
+    margin-top: 22px;
+    margin-bottom: 12px;
+    letter-spacing: -0.2px;
+  }
+  h3 {
+    font-size: 11pt;
+    font-weight: 600;
+    color: #1e293b;
+    margin-top: 16px;
+    margin-bottom: 8px;
+  }
+  p {
+    margin: 0 0 10px 0;
+    color: #334155;
+  }
+
+  /* Cards & Callouts */
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+  .callout-card {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-left: 4px solid #0284c7;
+    border-radius: 5px;
+    padding: 10px 12px;
+  }
+  .callout-card.amber {
+    border-left-color: #f59e0b;
+  }
+  .callout-card.emerald {
+    border-left-color: #10b981;
+  }
+  .callout-card.violet {
+    border-left-color: #8b5cf6;
+  }
+  .callout-card h4 {
+    margin: 0 0 4px 0;
+    font-size: 9.5pt;
+    font-weight: 700;
+    color: #0f172a;
+  }
+  .callout-card p {
+    font-size: 8.5pt;
+    margin: 0;
+    color: #475569;
+  }
+
+  /* Tables */
+  table.spec-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 14px;
+    font-size: 8.5pt;
+    background: #ffffff;
+  }
+  table.spec-table th {
+    background: #0f172a;
+    color: #ffffff;
+    text-align: left;
+    padding: 6px 9px;
+    font-weight: 600;
+    font-size: 8pt;
+    letter-spacing: 0.3px;
+    border: 1px solid #0f172a;
+  }
+  table.spec-table td {
+    padding: 5.5px 9px;
+    border: 1px solid #e2e8f0;
+    vertical-align: top;
+    color: #334155;
+  }
+  table.spec-table tr:nth-child(even) td {
+    background: #f8fafc;
+  }
+  table.spec-table tr:hover td {
+    background: #f1f5f9;
+  }
+
+  /* Code & Badges */
+  code {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 8pt;
+    background: #f1f5f9;
+    color: #0369a1;
+    padding: 1px 4px;
+    border-radius: 3px;
+    border: 1px solid #e2e8f0;
+  }
+  .pill {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 9999px;
+    font-size: 7pt;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    text-transform: uppercase;
+  }
+  .pill-pk { background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; }
+  .pill-fk { background: #fef3c7; color: #b45309; border: 1px solid #fcd34d; }
+  .pill-uk { background: #e0e7ff; color: #4338ca; border: 1px solid #c7d2fe; }
+  .pill-chk { background: #dcfce7; color: #15803d; border: 1px solid #86efac; }
+  .pill-idx { background: #f3e8ff; color: #7e22ce; border: 1px solid #d8b4fe; }
+
+  /* Diagram Container */
+  .diagram-wrapper {
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 14px;
+    margin: 14px 0 20px 0;
+    text-align: center;
+  }
+  .diagram-legend {
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+    margin-top: 10px;
+    font-size: 7.5pt;
+    font-weight: 600;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .legend-color {
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+  }
+
+  /* Footer Note */
+  .footer-note {
+    font-size: 7.5pt;
+    color: #64748b;
+    border-top: 1px solid #e2e8f0;
+    padding-top: 6px;
+    margin-top: 16px;
+    text-align: right;
+  }
+</style>
+</head>
+<body>
+
+  <!-- COVER HEADER -->
+  <div class="cover">
+    <div class="doc-badge">Platform Architecture & Relational Engineering</div>
+    <h1 class="doc-title">Database Schema & Relational Topology</h1>
+    <div class="doc-subtitle">Exhaustive Data Model, Entity Interconnections, Invariants & Lifecycle State Machines</div>
+    <div class="meta-grid">
+      <div class="meta-item">
+        <strong>Engine & Storage</strong>
+        PostgreSQL 15+ / PGlite (ACID)
+      </div>
+      <div class="meta-item">
+        <strong>Active Entities</strong>
+        15 Relational Tables / 9 Enums
+      </div>
+      <div class="meta-item">
+        <strong>Tenancy Model</strong>
+        Multi-Tenant Scoped (Strict FK)
+      </div>
+      <div class="meta-item">
+        <strong>Document Version</strong>
+        v1.2.0 (Post-P0/P3 Hardening)
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 1: CORE ARCHITECTURAL INVARIANTS -->
+  <h2>1. Architectural Guarantees & System Invariants</h2>
+  <p>The database schema is constructed by first-principles to provide an uncompromising transactional backbone for enterprise carpooling. Every operational query, corridor match, seat allocation, and administrative action conforms to four foundation invariants:</p>
+
+  <div class="grid-2">
+    <div class="callout-card">
+      <h4>1. Strict Multi-Tenant Boundary Isolation</h4>
+      <p>Every operational table maintains an explicit, non-nullable <code>organization_id UUID</code> referencing <code>organizations.id</code>. All unique and performance indexes are compound-keyed with <code>organization_id</code>, ensuring absolute cross-tenant data isolation and preventing data leakage across corporate entities.</p>
+    </div>
+    <div class="callout-card amber">
+      <h4>2. Clean Domain & Asset Separation</h4>
+      <p>Identity (<code>users</code>) is decoupled from physical assets (<code>vehicles</code>), scheduled journeys (<code>rides</code>), corridor vectors (<code>ride_routes</code>), and booking tenders (<code>ride_requests</code>). Commuter pickup/drop coordinates are never stored directly on the ride; routes are never opaque strings.</p>
+    </div>
+    <div class="callout-card emerald">
+      <h4>3. Concurrency Safety & Seat Integrity</h4>
+      <p>Seats cannot be oversold under concurrent load. Enforced via database-level check constraints (<code>chk_available_seats_non_negative</code>: <code>available_seats &gt;= 0</code> and <code>available_seats &lt;= total_seats_offered</code>), combined with PostgreSQL row-level pessimistic locking (<code>FOR UPDATE</code>) in transactional workflows.</p>
+    </div>
+    <div class="callout-card violet">
+      <h4>4. Geospatial Corridor Optimization</h4>
+      <p>Spatial routes are structured with 4D bounding boxes (<code>min/max latitude/longitude</code>) and ordered waypoint nodes (<code>route_waypoints</code>). Search queries execute sub-millisecond bounding box containment tests before corridor polygon calculations, eliminating expensive table scans.</p>
+    </div>
+  </div>
+
+  <!-- SECTION 2: ENTITY RELATIONSHIP DIAGRAM (SVG) -->
+  <div class="page-break"></div>
+  <h2>2. Canonical Entity-Relationship Topology (ERD)</h2>
+  <p>The diagram below depicts all 15 tables in the system, color-coded by domain cluster. Lines illustrate foreign key relationships and cardinalities across tenant boundaries, driver scheduling, and passenger matching.</p>
+
+  <div class="diagram-wrapper">
+    <svg viewBox="0 0 880 620" width="100%" height="560" xmlns="http://www.w3.org/2000/svg" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#64748b"/>
+        </marker>
+        <marker id="arrow-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#0284c7"/>
+        </marker>
+        <marker id="arrow-emerald" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#10b981"/>
+        </marker>
+        <marker id="arrow-amber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#f59e0b"/>
+        </marker>
+        <filter id="shadow" x="-5%" y="-5%" width="110%" height="115%" filterUnits="userSpaceOnUse">
+          <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.08"/>
+        </filter>
+      </defs>
+
+      <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+        <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#f1f5f9" stroke-width="1"/>
+      </pattern>
+      <rect width="880" height="620" fill="url(#grid)" rx="6"/>
+
+      <!-- Relational Connectors -->
+      <path d="M 120 70 L 120 120" stroke="#0284c7" stroke-width="1.8" fill="none" marker-end="url(#arrow-blue)"/>
+      <path d="M 70 210 L 70 250" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+      <path d="M 160 210 L 160 250" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+      <path d="M 190 190 L 230 250" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+      <path d="M 200 155 L 280 155" stroke="#0284c7" stroke-width="1.8" fill="none" marker-end="url(#arrow-blue)"/>
+      <path d="M 370 185 L 430 185" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+      <path d="M 200 135 L 430 135" stroke="#0284c7" stroke-width="1.8" stroke-dasharray="4,2" fill="none" marker-end="url(#arrow-blue)"/>
+      <path d="M 540 135 L 610 135" stroke="#10b981" stroke-width="1.8" fill="none" marker-end="url(#arrow-emerald)"/>
+      <path d="M 700 200 L 700 250" stroke="#10b981" stroke-width="1.8" fill="none" marker-end="url(#arrow-emerald)"/>
+      <path d="M 140 210 L 140 370 L 300 370" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+      <path d="M 140 370 L 140 430 L 300 430" stroke="#64748b" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>
+      <path d="M 400 370 L 450 370" stroke="#f59e0b" stroke-width="1.5" fill="none" marker-end="url(#arrow-amber)"/>
+      <path d="M 400 430 L 430 430 L 430 400 L 450 400" stroke="#f59e0b" stroke-width="1.5" fill="none" marker-end="url(#arrow-amber)"/>
+      <path d="M 485 210 L 485 340" stroke="#10b981" stroke-width="1.8" fill="none" marker-end="url(#arrow-emerald)"/>
+      <path d="M 570 380 L 630 380" stroke="#f59e0b" stroke-width="1.8" fill="none" marker-end="url(#arrow-amber)"/>
+      <path d="M 520 210 L 520 310 L 680 310 L 680 340" stroke="#10b981" stroke-width="1.5" stroke-dasharray="4,2" fill="none" marker-end="url(#arrow-emerald)"/>
+      <path d="M 80 210 L 80 520 L 260 520" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="3,3" fill="none" marker-end="url(#arrow)"/>
+      <path d="M 100 210 L 100 570 L 450 570" stroke="#8b5cf6" stroke-width="1.5" stroke-dasharray="3,3" fill="none" marker-end="url(#arrow)"/>
+
+      <!-- Entities -->
+      <!-- 1. ORGANIZATIONS -->
+      <g filter="url(#shadow)">
+        <rect x="40" y="20" width="160" height="50" rx="6" fill="#ffffff" stroke="#0284c7" stroke-width="2"/>
+        <rect x="40" y="20" width="160" height="20" rx="6" fill="#0284c7"/>
+        <text x="120" y="34" fill="#ffffff" font-size="9.5" font-weight="700" text-anchor="middle">organizations</text>
+        <text x="48" y="55" fill="#0f172a" font-size="8">id (PK) • slug (UK) • name</text>
+      </g>
+
+      <!-- 2. USERS -->
+      <g filter="url(#shadow)">
+        <rect x="40" y="120" width="160" height="90" rx="6" fill="#ffffff" stroke="#0284c7" stroke-width="2"/>
+        <rect x="40" y="120" width="160" height="20" rx="6" fill="#0284c7"/>
+        <text x="120" y="134" fill="#ffffff" font-size="9.5" font-weight="700" text-anchor="middle">users</text>
+        <text x="48" y="153" fill="#0f172a" font-size="7.5">id (PK) • organization_id (FK)</text>
+        <text x="48" y="166" fill="#334155" font-size="7.5">email • full_name • status</text>
+        <text x="48" y="179" fill="#334155" font-size="7.5">password_hash • invitation_tok</text>
+        <text x="48" y="192" fill="#64748b" font-size="7">UK: org_id + lower(email)</text>
+        <text x="48" y="203" fill="#64748b" font-size="7">IDX: invitation_token</text>
+      </g>
+
+      <!-- 3. USER_CAPABILITIES -->
+      <g filter="url(#shadow)">
+        <rect x="20" y="250" width="105" height="52" rx="5" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+        <rect x="20" y="250" width="105" height="16" rx="5" fill="#e2e8f0"/>
+        <text x="72" y="262" fill="#1e293b" font-size="8" font-weight="700" text-anchor="middle">user_capabilities</text>
+        <text x="26" y="278" fill="#334155" font-size="7">user_id (FK, UK)</text>
+        <text x="26" y="291" fill="#64748b" font-size="7">can_ride • can_drive • admin</text>
+      </g>
+
+      <!-- 4. USER_PREFERENCES -->
+      <g filter="url(#shadow)">
+        <rect x="135" y="250" width="105" height="52" rx="5" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+        <rect x="135" y="250" width="105" height="16" rx="5" fill="#e2e8f0"/>
+        <text x="187" y="262" fill="#1e293b" font-size="8" font-weight="700" text-anchor="middle">user_preferences</text>
+        <text x="141" y="278" fill="#334155" font-size="7">user_id (FK, UK)</text>
+        <text x="141" y="291" fill="#64748b" font-size="7">max_detour • quiet • tags</text>
+      </g>
+
+      <!-- 5. USER_LOCATIONS -->
+      <g filter="url(#shadow)">
+        <rect x="250" y="250" width="110" height="52" rx="5" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+        <rect x="250" y="250" width="110" height="16" rx="5" fill="#e2e8f0"/>
+        <text x="305" y="262" fill="#1e293b" font-size="8" font-weight="700" text-anchor="middle">user_locations</text>
+        <text x="256" y="278" fill="#334155" font-size="7">user_id (FK) • label</text>
+        <text x="256" y="291" fill="#64748b" font-size="7">lat / lng • is_default_pickup</text>
+      </g>
+
+      <!-- 6. VEHICLES -->
+      <g filter="url(#shadow)">
+        <rect x="280" y="125" width="115" height="75" rx="6" fill="#ffffff" stroke="#0284c7" stroke-width="1.8"/>
+        <rect x="280" y="125" width="115" height="18" rx="6" fill="#0284c7"/>
+        <text x="337" y="138" fill="#ffffff" font-size="8.5" font-weight="700" text-anchor="middle">vehicles</text>
+        <text x="286" y="155" fill="#0f172a" font-size="7.5">id (PK) • owner_id (FK)</text>
+        <text x="286" y="168" fill="#334155" font-size="7.5">license_plate • seats</text>
+        <text x="286" y="181" fill="#334155" font-size="7.5">vehicle_type • status</text>
+        <text x="286" y="193" fill="#64748b" font-size="7">UK: org_id + license_plate</text>
+      </g>
+
+      <!-- 7. RIDES (CORE) -->
+      <g filter="url(#shadow)">
+        <rect x="430" y="105" width="135" height="105" rx="6" fill="#ffffff" stroke="#10b981" stroke-width="2.2"/>
+        <rect x="430" y="105" width="135" height="20" rx="6" fill="#10b981"/>
+        <text x="497" y="119" fill="#ffffff" font-size="9.5" font-weight="700" text-anchor="middle">rides</text>
+        <text x="438" y="138" fill="#0f172a" font-size="7.5">id (PK) • driver_id (FK)</text>
+        <text x="438" y="151" fill="#0f172a" font-size="7.5">vehicle_id (FK) • org_id (FK)</text>
+        <text x="438" y="164" fill="#334155" font-size="7.5">status (ENUM) • departure_time</text>
+        <text x="438" y="177" fill="#b91c1c" font-size="7.5" font-weight="600">available_seats / total_seats</text>
+        <text x="438" y="190" fill="#64748b" font-size="7">version (OCC) • cost_cents</text>
+        <text x="438" y="202" fill="#15803d" font-size="7">CHK: 0 &lt;= avail &lt;= total</text>
+      </g>
+
+      <!-- 8. RIDE_ROUTES -->
+      <g filter="url(#shadow)">
+        <rect x="610" y="115" width="145" height="85" rx="6" fill="#ffffff" stroke="#10b981" stroke-width="1.8"/>
+        <rect x="610" y="115" width="145" height="18" rx="6" fill="#10b981"/>
+        <text x="682" y="128" fill="#ffffff" font-size="8.5" font-weight="700" text-anchor="middle">ride_routes</text>
+        <text x="616" y="145" fill="#0f172a" font-size="7.5">id (PK) • ride_id (FK, UK)</text>
+        <text x="616" y="158" fill="#334155" font-size="7.5">origin / dest coordinates</text>
+        <text x="616" y="171" fill="#334155" font-size="7.5">min/max lat/lng (BBox)</text>
+        <text x="616" y="184" fill="#64748b" font-size="7">distance_meters • polyline</text>
+        <text x="616" y="194" fill="#7e22ce" font-size="7">IDX: bounding_box coords</text>
+      </g>
+
+      <!-- 9. ROUTE_WAYPOINTS -->
+      <g filter="url(#shadow)">
+        <rect x="630" y="250" width="140" height="60" rx="5" fill="#ffffff" stroke="#10b981" stroke-width="1.5"/>
+        <rect x="630" y="250" width="140" height="16" rx="5" fill="#a7f3d0"/>
+        <text x="700" y="262" fill="#065f46" font-size="8" font-weight="700" text-anchor="middle">route_waypoints</text>
+        <text x="636" y="278" fill="#334155" font-size="7">route_id (FK) • stop_order</text>
+        <text x="636" y="291" fill="#334155" font-size="7">point_type • latitude • longitude</text>
+        <text x="636" y="303" fill="#64748b" font-size="7">UK: route_id + stop_order</text>
+      </g>
+
+      <!-- 10. PICKUP_POINTS -->
+      <g filter="url(#shadow)">
+        <rect x="300" y="350" width="105" height="42" rx="5" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+        <rect x="300" y="350" width="105" height="14" rx="5" fill="#fef3c7"/>
+        <text x="352" y="361" fill="#92400e" font-size="7.5" font-weight="700" text-anchor="middle">pickup_points</text>
+        <text x="306" y="375" fill="#334155" font-size="7">id (PK) • passenger_id (FK)</text>
+        <text x="306" y="386" fill="#64748b" font-size="7">address • lat/lng • note</text>
+      </g>
+
+      <!-- 11. DROP_POINTS -->
+      <g filter="url(#shadow)">
+        <rect x="300" y="410" width="105" height="42" rx="5" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+        <rect x="300" y="410" width="105" height="14" rx="5" fill="#fef3c7"/>
+        <text x="352" y="421" fill="#92400e" font-size="7.5" font-weight="700" text-anchor="middle">drop_points</text>
+        <text x="306" y="435" fill="#334155" font-size="7">id (PK) • passenger_id (FK)</text>
+        <text x="306" y="446" fill="#64748b" font-size="7">address • lat/lng • note</text>
+      </g>
+
+      <!-- 12. RIDE_REQUESTS -->
+      <g filter="url(#shadow)">
+        <rect x="450" y="340" width="125" height="95" rx="6" fill="#ffffff" stroke="#f59e0b" stroke-width="2"/>
+        <rect x="450" y="340" width="125" height="18" rx="6" fill="#f59e0b"/>
+        <text x="512" y="353" fill="#ffffff" font-size="8.5" font-weight="700" text-anchor="middle">ride_requests</text>
+        <text x="456" y="370" fill="#0f172a" font-size="7.5">id (PK) • ride_id (FK)</text>
+        <text x="456" y="382" fill="#0f172a" font-size="7.5">passenger_id (FK)</text>
+        <text x="456" y="394" fill="#334155" font-size="7.5">pickup_pt_id • drop_pt_id</text>
+        <text x="456" y="406" fill="#334155" font-size="7.5">requested_seats • status</text>
+        <text x="456" y="418" fill="#64748b" font-size="7">UK: ride_id + passenger (active)</text>
+        <text x="456" y="429" fill="#64748b" font-size="7">version (OCC) • rider_note</text>
+      </g>
+
+      <!-- 13. RIDE_PASSENGERS -->
+      <g filter="url(#shadow)">
+        <rect x="630" y="340" width="135" height="75" rx="6" fill="#ffffff" stroke="#f59e0b" stroke-width="2"/>
+        <rect x="630" y="340" width="135" height="18" rx="6" fill="#f59e0b"/>
+        <text x="697" y="353" fill="#ffffff" font-size="8.5" font-weight="700" text-anchor="middle">ride_passengers</text>
+        <text x="636" y="370" fill="#0f172a" font-size="7.5">id (PK) • ride_id (FK)</text>
+        <text x="636" y="382" fill="#0f172a" font-size="7.5">ride_request_id (FK, UK)</text>
+        <text x="636" y="394" fill="#334155" font-size="7.5">passenger_id (FK)</text>
+        <text x="636" y="406" fill="#15803d" font-size="7">seats_booked (CHK &gt; 0)</text>
+      </g>
+
+      <!-- 14. NOTIFICATIONS -->
+      <g filter="url(#shadow)">
+        <rect x="260" y="495" width="140" height="55" rx="5" fill="#ffffff" stroke="#8b5cf6" stroke-width="1.5"/>
+        <rect x="260" y="495" width="140" height="16" rx="5" fill="#ddd6fe"/>
+        <text x="330" y="507" fill="#5b21b6" font-size="8" font-weight="700" text-anchor="middle">notifications</text>
+        <text x="266" y="523" fill="#334155" font-size="7">user_id (FK) • type • channel</text>
+        <text x="266" y="536" fill="#334155" font-size="7">title • body • payload_json • read_at</text>
+        <text x="266" y="546" fill="#64748b" font-size="6.5">IDX: user_id + read_at + created_at</text>
+      </g>
+
+      <!-- 15. AUDIT_LOGS -->
+      <g filter="url(#shadow)">
+        <rect x="450" y="540" width="155" height="62" rx="5" fill="#ffffff" stroke="#8b5cf6" stroke-width="1.5"/>
+        <rect x="450" y="540" width="155" height="16" rx="5" fill="#ddd6fe"/>
+        <text x="527" y="552" fill="#5b21b6" font-size="8" font-weight="700" text-anchor="middle">audit_logs (Immutable)</text>
+        <text x="456" y="568" fill="#334155" font-size="7">actor_user_id (FK) • org_id (FK)</text>
+        <text x="456" y="581" fill="#334155" font-size="7">entity_type • entity_id • action</text>
+        <text x="456" y="594" fill="#64748b" font-size="6.5">from_state • to_state • metadata_json</text>
+      </g>
+
+      <!-- 16. RATE_LIMITS -->
+      <g filter="url(#shadow)">
+        <rect x="670" y="540" width="135" height="52" rx="5" fill="#ffffff" stroke="#dc2626" stroke-width="1.5"/>
+        <rect x="670" y="540" width="135" height="16" rx="5" fill="#fecaca"/>
+        <text x="737" y="552" fill="#991b1b" font-size="8" font-weight="700" text-anchor="middle">rate_limits (Shared)</text>
+        <text x="676" y="568" fill="#334155" font-size="7">key VARCHAR(255) (PK)</text>
+        <text x="676" y="581" fill="#64748b" font-size="7">count • reset_at (IDX) • updated_at</text>
+      </g>
+
+    </svg>
+
+    <div class="diagram-legend">
+      <div class="legend-item"><div class="legend-color" style="background:#0284c7;"></div> Identity & Multi-Tenant Core</div>
+      <div class="legend-item"><div class="legend-color" style="background:#10b981;"></div> Rides & Corridor Spatial Subsystem</div>
+      <div class="legend-item"><div class="legend-color" style="background:#f59e0b;"></div> Request & Passenger Manifest</div>
+      <div class="legend-item"><div class="legend-color" style="background:#8b5cf6;"></div> Governance, Audit & Messaging</div>
+      <div class="legend-item"><div class="legend-color" style="background:#dc2626;"></div> Distributed Security & Limiting</div>
+    </div>
+  </div>
+
+  <!-- SECTION 3: DOMAIN SUBSYSTEMS & INTERCONNECTIONS -->
+  <div class="page-break"></div>
+  <h2>3. Domain Subsystems & Lifecycle Interconnections</h2>
+
+  <h3>3.1 Identity, Tenancy & Vehicle Ownership</h3>
+  <p>The tenant root is <code>organizations</code>. Every employee record in <code>users</code> is bounded by its parent organization. Capabilities (<code>can_ride</code>, <code>can_drive</code>, <code>is_org_admin</code>) are maintained in a 1-to-1 extension table <code>user_capabilities</code> to keep the core identity table compact and audit-friendly. Vehicles are owned by users (<code>vehicles.owner_id</code>) and must be verified before drivers can schedule rides with them.</p>
+
+  <h3>3.2 Scheduled Rides, Corridors & Bounding Box Spatial Indexing</h3>
+  <p>When a driver posts a ride, three tightly coupled entities are populated:</p>
+  <ul>
+    <li><code>rides</code>: Tracks temporal schedules, status, and seat counters (<code>available_seats</code> and <code>total_seats_offered</code>).</li>
+    <li><code>ride_routes</code>: Contains the departure and arrival coordinates, total route duration, distance, polyline, and geographic bounding box (<code>min_latitude</code>, <code>max_latitude</code>, <code>min_longitude</code>, <code>max_longitude</code>).</li>
+    <li><code>route_waypoints</code>: Normalized intermediate stops along the corridor with cumulative <code>estimated_arrival_offset_seconds</code>.</li>
+  </ul>
+  <p>During search, the query uses the indexed bounding box coordinates to quickly eliminate 99% of non-matching rides before executing corridor detour evaluations.</p>
+
+  <h3>3.3 Request Negotiation, Optimistic Concurrency & Pessimistic Seat Locking</h3>
+  <p>Passengers submit requests via <code>ride_requests</code>, referencing their chosen <code>pickup_points</code> and <code>drop_points</code>. When a driver accepts a request, concurrency control prevents race conditions:</p>
+
+  <div class="callout-card emerald no-break" style="margin: 10px 0 16px 0;">
+    <h4>Atomic Acceptance & Booking Workflow (PostgreSQL Transaction)</h4>
+    <p>1. <code>SELECT * FROM ride_requests WHERE id = $1 FOR UPDATE;</code> (Row-level exclusive lock on request)</p>
+    <p>2. <code>SELECT * FROM rides WHERE id = $2 FOR UPDATE;</code> (Row-level exclusive lock on ride)</p>
+    <p>3. Verify <code>available_seats &gt;= requested_seats</code> and driver ownership.</p>
+    <p>4. Decrement <code>available_seats = available_seats - requested_seats</code> on <code>rides</code>.</p>
+    <p>5. Transition request status to <code>ACCEPTED</code>.</p>
+    <p>6. Insert confirmed booking record into <code>ride_passengers</code>.</p>
+    <p>7. Commit transaction. If available seats violate constraints, PostgreSQL raises an invariant error and aborts.</p>
+  </div>
+
+  <!-- SECTION 4: EXHAUSTIVE DATA DICTIONARY -->
+  <div class="page-break"></div>
+  <h2>4. Exhaustive Data Dictionary (All 15 Tables)</h2>
+
+  <!-- TABLE 1: organizations -->
+  <div class="no-break">
+    <h3>4.1 organizations — Tenant Partitioning Root</h3>
+    <p>Represents the corporate tenant. All platform operations are strictly isolated by organization.</p>
+    <table class="spec-table">
+      <thead>
+        <tr><th>Column</th><th>Type</th><th>Attributes</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>id</code></td><td>UUID</td><td><span class="pill pill-pk">PK</span> default gen_random_uuid()</td><td>Unique organization identifier</td></tr>
+        <tr><td><code>name</code></td><td>VARCHAR(255)</td><td>NOT NULL</td><td>Corporate legal or trade name</td></tr>
+        <tr><td><code>slug</code></td><td>VARCHAR(100)</td><td><span class="pill pill-uk">UK</span> NOT NULL</td><td>URL and subdomain slug</td></tr>
+        <tr><td><code>allowed_email_domains</code></td><td>TEXT[]</td><td>NOT NULL</td><td>Whitelist of permitted corporate email domains</td></tr>
+        <tr><td><code>settings</code></td><td>JSONB</td><td>NOT NULL DEFAULT '{}'</td><td>Custom tenant configuration policies</td></tr>
+        <tr><td><code>is_active</code></td><td>BOOLEAN</td><td>NOT NULL DEFAULT TRUE</td><td>Tenant platform access flag</td></tr>
+        <tr><td><code>created_at</code> / <code>updated_at</code></td><td>TIMESTAMPTZ</td><td>NOT NULL DEFAULT NOW()</td><td>Creation and last modification timestamp</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- TABLE 2: users -->
+  <div class="no-break">
+    <h3>4.2 users — Identity & Authentication Ledger</h3>
+    <p>Corporate employee profiles, password hashes, and identity provider linkages.</p>
+    <table class="spec-table">
+      <thead>
+        <tr><th>Column</th><th>Type</th><th>Attributes</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>id</code></td><td>UUID</td><td><span class="pill pill-pk">PK</span> default gen_random_uuid()</td><td>Unique user identifier</td></tr>
+        <tr><td><code>organization_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> NOT NULL → organizations(id)</td><td>Tenant association (ON DELETE RESTRICT)</td></tr>
+        <tr><td><code>email</code></td><td>VARCHAR(255)</td><td>NOT NULL</td><td>Corporate email address</td></tr>
+        <tr><td><code>full_name</code></td><td>VARCHAR(255)</td><td>NOT NULL</td><td>Employee display name</td></tr>
+        <tr><td><code>phone_number</code></td><td>VARCHAR(50)</td><td>NULLABLE</td><td>Contact phone number</td></tr>
+        <tr><td><code>status</code></td><td>user_status</td><td>NOT NULL DEFAULT 'ACTIVE'</td><td><code>ACTIVE</code>, <code>INACTIVE</code>, <code>SUSPENDED</code>, <code>PENDING_VERIFICATION</code></td></tr>
+        <tr><td><code>work_department</code></td><td>VARCHAR(100)</td><td>NULLABLE</td><td>Employee department</td></tr>
+        <tr><td><code>work_location</code></td><td>VARCHAR(255)</td><td>NULLABLE</td><td>Assigned campus or office building</td></tr>
+        <tr><td><code>password_hash</code></td><td>VARCHAR(255)</td><td>NULLABLE</td><td>Scrypt salt:hash string for native authentication</td></tr>
+        <tr><td><code>invitation_token</code></td><td>VARCHAR(100)</td><td><span class="pill pill-idx">IDX</span> NULLABLE</td><td>One-time token for account activation</td></tr>
+        <tr><td><code>invitation_token_expires_at</code></td><td>TIMESTAMPTZ</td><td>NULLABLE</td><td>Expiration timestamp for invitation token</td></tr>
+      </tbody>
+    </table>
+    <p><strong>Indexes & Constraints:</strong> <code>uq_users_org_lower_email</code> UNIQUE (<code>organization_id</code>, <code>lower(email)</code>); <code>idx_users_org_status</code> INDEX (<code>organization_id</code>, <code>status</code>); <code>idx_users_invitation_token</code> INDEX (<code>invitation_token</code>).</p>
+  </div>
+
+  <!-- TABLE 3 & 4: user_capabilities & user_preferences -->
+  <div class="page-break"></div>
+  <div class="no-break">
+    <h3>4.3 user_capabilities — Permissions & Verification</h3>
+    <table class="spec-table">
+      <thead>
+        <tr><th>Column</th><th>Type</th><th>Attributes</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>id</code></td><td>UUID</td><td><span class="pill pill-pk">PK</span> default gen_random_uuid()</td><td>Capability record ID</td></tr>
+        <tr><td><code>user_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> <span class="pill pill-uk">UK</span> → users(id)</td><td>User reference (ON DELETE CASCADE)</td></tr>
+        <tr><td><code>organization_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> → organizations(id)</td><td>Tenant association</td></tr>
+        <tr><td><code>can_ride</code></td><td>BOOLEAN</td><td>NOT NULL DEFAULT TRUE</td><td>Authorized to book rides as passenger</td></tr>
+        <tr><td><code>can_drive</code></td><td>BOOLEAN</td><td>NOT NULL DEFAULT FALSE</td><td>Authorized to offer rides as driver</td></tr>
+        <tr><td><code>is_org_admin</code></td><td>BOOLEAN</td><td>NOT NULL DEFAULT FALSE</td><td>Administrative rights for tenant organization</td></tr>
+        <tr><td><code>driver_verified_at</code></td><td>TIMESTAMPTZ</td><td>NULLABLE</td><td>Timestamp when driver license was validated</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="no-break">
+    <h3>4.4 user_preferences — Commuter Personalization</h3>
+    <table class="spec-table">
+      <thead>
+        <tr><th>Column</th><th>Type</th><th>Attributes</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>id</code></td><td>UUID</td><td><span class="pill pill-pk">PK</span> default gen_random_uuid()</td><td>Preference record ID</td></tr>
+        <tr><td><code>user_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> <span class="pill pill-uk">UK</span> → users(id)</td><td>User reference (ON DELETE CASCADE)</td></tr>
+        <tr><td><code>organization_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> → organizations(id)</td><td>Tenant association</td></tr>
+        <tr><td><code>free_text_preferences</code></td><td>TEXT</td><td>NULLABLE</td><td>Natural language commuting notes</td></tr>
+        <tr><td><code>tags</code></td><td>TEXT[]</td><td>DEFAULT '{}'</td><td>Categorical preference tags (e.g. non-smoker)</td></tr>
+        <tr><td><code>max_detour_minutes</code></td><td>INTEGER</td><td>DEFAULT 15</td><td>Maximum acceptable detour minutes</td></tr>
+        <tr><td><code>quiet_ride</code></td><td>BOOLEAN</td><td>DEFAULT FALSE</td><td>Preference for silent commute</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- TABLE 5: vehicles -->
+  <div class="no-break">
+    <h3>4.5 vehicles — Driver Fleet & Asset Registry</h3>
+    <table class="spec-table">
+      <thead>
+        <tr><th>Column</th><th>Type</th><th>Attributes</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>id</code></td><td>UUID</td><td><span class="pill pill-pk">PK</span> default gen_random_uuid()</td><td>Unique vehicle identifier</td></tr>
+        <tr><td><code>owner_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> NOT NULL → users(id)</td><td>Driver / vehicle owner (ON DELETE RESTRICT)</td></tr>
+        <tr><td><code>organization_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> NOT NULL → organizations(id)</td><td>Tenant association</td></tr>
+        <tr><td><code>make</code> / <code>model</code> / <code>year</code></td><td>VARCHAR / SMALLINT</td><td>NOT NULL</td><td>Vehicle manufacturer details</td></tr>
+        <tr><td><code>license_plate</code></td><td>VARCHAR(20)</td><td>NOT NULL</td><td>Official vehicle registration plate</td></tr>
+        <tr><td><code>total_seats</code></td><td>SMALLINT</td><td>NOT NULL</td><td>Manufacturer physical seat count</td></tr>
+        <tr><td><code>max_passenger_capacity</code></td><td>SMALLINT</td><td>NOT NULL DEFAULT 4</td><td>Maximum seats available for carpooling</td></tr>
+        <tr><td><code>status</code></td><td>vehicle_status</td><td>NOT NULL DEFAULT 'ACTIVE'</td><td><code>ACTIVE</code>, <code>INACTIVE</code>, <code>PENDING_INSPECTION</code></td></tr>
+      </tbody>
+    </table>
+    <p><strong>Indexes & Constraints:</strong> <code>uq_vehicles_org_plate</code> UNIQUE (<code>organization_id</code>, <code>license_plate</code>); <code>idx_vehicles_owner</code> INDEX (<code>owner_id</code>).</p>
+  </div>
+
+  <!-- TABLE 6: rides -->
+  <div class="page-break"></div>
+  <div class="no-break">
+    <h3>4.6 rides — Scheduled Carpool Journeys</h3>
+    <p>The operational core of the platform. Hosts scheduled rides and enforces atomic seat accounting.</p>
+    <table class="spec-table">
+      <thead>
+        <tr><th>Column</th><th>Type</th><th>Attributes</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>id</code></td><td>UUID</td><td><span class="pill pill-pk">PK</span> default gen_random_uuid()</td><td>Unique ride identifier</td></tr>
+        <tr><td><code>organization_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> NOT NULL → organizations(id)</td><td>Tenant boundary</td></tr>
+        <tr><td><code>driver_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> NOT NULL → users(id)</td><td>Ride host / driver</td></tr>
+        <tr><td><code>vehicle_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> NOT NULL → vehicles(id)</td><td>Vehicle deployed for ride</td></tr>
+        <tr><td><code>status</code></td><td>ride_status</td><td>NOT NULL DEFAULT 'DRAFT'</td><td><code>DRAFT</code>, <code>SCHEDULED</code>, <code>IN_PROGRESS</code>, <code>COMPLETED</code>, <code>CANCELLED</code></td></tr>
+        <tr><td><code>departure_time</code></td><td>TIMESTAMPTZ</td><td>NOT NULL</td><td>Planned origin departure datetime</td></tr>
+        <tr><td><code>arrival_time_estimated</code></td><td>TIMESTAMPTZ</td><td>NOT NULL</td><td>Estimated destination arrival datetime</td></tr>
+        <tr><td><code>total_seats_offered</code></td><td>SMALLINT</td><td><span class="pill pill-chk">CHK &gt; 0</span> NOT NULL</td><td>Initial seats opened by driver</td></tr>
+        <tr><td><code>available_seats</code></td><td>SMALLINT</td><td><span class="pill pill-chk">CHK &gt;= 0</span> NOT NULL</td><td>Remaining open bookable seats</td></tr>
+        <tr><td><code>cost_per_seat_cents</code></td><td>INTEGER</td><td>NOT NULL DEFAULT 0</td><td>Shared expense reimbursement in cents</td></tr>
+        <tr><td><code>version</code></td><td>INTEGER</td><td>NOT NULL DEFAULT 1</td><td>OCC version counter for optimistic locking</td></tr>
+      </tbody>
+    </table>
+    <p><strong>Check Constraints:</strong> <code>chk_available_seats_non_negative</code> (<code>available_seats &gt;= 0</code>), <code>chk_available_seats_le_total</code> (<code>available_seats &lt;= total_seats_offered</code>), <code>chk_total_seats_positive</code> (<code>total_seats_offered &gt; 0</code>).</p>
+    <p><strong>Indexes:</strong> <code>idx_rides_org_departure</code> (<code>organization_id</code>, <code>departure_time</code>, <code>status</code>); <code>idx_rides_driver</code> (<code>driver_id</code>, <code>departure_time</code>).</p>
+  </div>
+
+  <!-- TABLE 7 & 8: ride_routes & route_waypoints -->
+  <div class="no-break">
+    <h3>4.7 ride_routes — Spatial Corridor Definition</h3>
+    <table class="spec-table">
+      <thead>
+        <tr><th>Column</th><th>Type</th><th>Attributes</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>id</code></td><td>UUID</td><td><span class="pill pill-pk">PK</span> default gen_random_uuid()</td><td>Route identifier</td></tr>
+        <tr><td><code>ride_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> <span class="pill pill-uk">UK</span> → rides(id)</td><td>Associated ride (ON DELETE CASCADE)</td></tr>
+        <tr><td><code>origin_address</code> / <code>destination_address</code></td><td>TEXT</td><td>NOT NULL</td><td>Human-readable addresses</td></tr>
+        <tr><td><code>origin_latitude</code> / <code>origin_longitude</code></td><td>NUMERIC(10,7)</td><td>NOT NULL</td><td>Departure coordinates</td></tr>
+        <tr><td><code>destination_latitude</code> / <code>destination_longitude</code></td><td>NUMERIC(10,7)</td><td>NOT NULL</td><td>Arrival coordinates</td></tr>
+        <tr><td><code>total_distance_meters</code> / <code>total_duration_seconds</code></td><td>INTEGER</td><td>NOT NULL</td><td>Route metrics from routing engine</td></tr>
+        <tr><td><code>min_latitude</code>, <code>max_latitude</code>, <code>min_longitude</code>, <code>max_longitude</code></td><td>NUMERIC(10,7)</td><td>NOT NULL</td><td>Geographic bounding box for search queries</td></tr>
+        <tr><td><code>encoded_polyline</code></td><td>TEXT</td><td>NULLABLE</td><td>Google Encoded Polyline algorithm string</td></tr>
+      </tbody>
+    </table>
+    <p><strong>Indexes:</strong> <code>idx_ride_routes_bbox</code> INDEX (<code>min_latitude</code>, <code>max_latitude</code>, <code>min_longitude</code>, <code>max_longitude</code>).</p>
+  </div>
+
+  <div class="no-break">
+    <h3>4.8 route_waypoints — Corridor Transit Stops</h3>
+    <table class="spec-table">
+      <thead>
+        <tr><th>Column</th><th>Type</th><th>Attributes</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>id</code></td><td>UUID</td><td><span class="pill pill-pk">PK</span> default gen_random_uuid()</td><td>Waypoint identifier</td></tr>
+        <tr><td><code>route_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> NOT NULL → ride_routes(id)</td><td>Route association (ON DELETE CASCADE)</td></tr>
+        <tr><td><code>stop_order</code></td><td>SMALLINT</td><td>NOT NULL</td><td>Sequence order (0 = Origin, N = Destination)</td></tr>
+        <tr><td><code>point_type</code></td><td>waypoint_type</td><td>NOT NULL</td><td><code>ORIGIN</code>, <code>CORRIDOR</code>, <code>DESTINATION</code>, <code>PASSENGER_STOP</code></td></tr>
+        <tr><td><code>latitude</code> / <code>longitude</code></td><td>NUMERIC(10,7)</td><td>NOT NULL</td><td>Waypoint coordinates</td></tr>
+        <tr><td><code>estimated_arrival_offset_seconds</code></td><td>INTEGER</td><td>NOT NULL DEFAULT 0</td><td>Seconds from departure time to this stop</td></tr>
+      </tbody>
+    </table>
+    <p><strong>Indexes:</strong> <code>uq_route_waypoints_order</code> UNIQUE (<code>route_id</code>, <code>stop_order</code>); <code>idx_route_waypoints_coords</code> INDEX (<code>latitude</code>, <code>longitude</code>).</p>
+  </div>
+
+  <!-- TABLE 9, 10, 11, 12: ride_requests, pickup/drop, ride_passengers -->
+  <div class="page-break"></div>
+  <div class="no-break">
+    <h3>4.9 pickup_points & drop_points — Commuter Boarding Locations</h3>
+    <table class="spec-table">
+      <thead>
+        <tr><th>Column</th><th>Type</th><th>Attributes</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>id</code></td><td>UUID</td><td><span class="pill pill-pk">PK</span> default gen_random_uuid()</td><td>Point identifier</td></tr>
+        <tr><td><code>passenger_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> NOT NULL → users(id)</td><td>Commuter requesting pickup or drop</td></tr>
+        <tr><td><code>organization_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> NOT NULL → organizations(id)</td><td>Tenant association</td></tr>
+        <tr><td><code>address_text</code></td><td>TEXT</td><td>NOT NULL</td><td>Physical street or campus address</td></tr>
+        <tr><td><code>latitude</code> / <code>longitude</code></td><td>NUMERIC(10,7)</td><td>NOT NULL</td><td>Precise GPS location</td></tr>
+        <tr><td><code>landmark_note</code></td><td>TEXT</td><td>NULLABLE</td><td>Visual pickup cues (e.g. "Gate 3 near cafeteria")</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="no-break">
+    <h3>4.10 ride_requests — Booking Negotiations</h3>
+    <table class="spec-table">
+      <thead>
+        <tr><th>Column</th><th>Type</th><th>Attributes</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>id</code></td><td>UUID</td><td><span class="pill pill-pk">PK</span> default gen_random_uuid()</td><td>Request identifier</td></tr>
+        <tr><td><code>ride_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> NOT NULL → rides(id)</td><td>Target ride journey</td></tr>
+        <tr><td><code>passenger_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> NOT NULL → users(id)</td><td>Commuter requesting seat</td></tr>
+        <tr><td><code>pickup_point_id</code> / <code>drop_point_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> NOT NULL</td><td>References pickup_points / drop_points</td></tr>
+        <tr><td><code>requested_seats</code></td><td>SMALLINT</td><td>NOT NULL DEFAULT 1</td><td>Number of seats requested</td></tr>
+        <tr><td><code>status</code></td><td>ride_request_status</td><td>NOT NULL DEFAULT 'PENDING'</td><td><code>PENDING</code>, <code>ACCEPTED</code>, <code>REJECTED</code>, <code>CANCELLED</code>, <code>EXPIRED</code></td></tr>
+        <tr><td><code>rider_note</code></td><td>TEXT</td><td>NULLABLE</td><td>Note to host driver</td></tr>
+        <tr><td><code>version</code></td><td>INTEGER</td><td>NOT NULL DEFAULT 1</td><td>OCC version counter</td></tr>
+      </tbody>
+    </table>
+    <p><strong>Indexes:</strong> <code>uq_ride_requests_active_passenger</code> UNIQUE (<code>ride_id</code>, <code>passenger_id</code>) WHERE <code>status IN ('PENDING', 'ACCEPTED')</code>; <code>idx_ride_requests_ride</code> (<code>ride_id</code>, <code>status</code>); <code>idx_ride_requests_passenger</code> (<code>passenger_id</code>, <code>status</code>).</p>
+  </div>
+
+  <div class="no-break">
+    <h3>4.11 ride_passengers — Confirmed Manifest</h3>
+    <table class="spec-table">
+      <thead>
+        <tr><th>Column</th><th>Type</th><th>Attributes</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>id</code></td><td>UUID</td><td><span class="pill pill-pk">PK</span> default gen_random_uuid()</td><td>Manifest entry ID</td></tr>
+        <tr><td><code>ride_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> NOT NULL → rides(id)</td><td>Target ride</td></tr>
+        <tr><td><code>ride_request_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> <span class="pill pill-uk">UK</span> → ride_requests(id)</td><td>Originating request (1:1)</td></tr>
+        <tr><td><code>passenger_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> NOT NULL → users(id)</td><td>Confirmed passenger</td></tr>
+        <tr><td><code>seats_booked</code></td><td>SMALLINT</td><td><span class="pill pill-chk">CHK &gt; 0</span> NOT NULL</td><td>Guaranteed reserved seats</td></tr>
+        <tr><td><code>cost_charged_cents</code></td><td>INTEGER</td><td>NOT NULL DEFAULT 0</td><td>Final fare charged to commuter</td></tr>
+      </tbody>
+    </table>
+    <p><strong>Constraints:</strong> <code>chk_seats_booked_positive</code> (<code>seats_booked &gt; 0</code>); <code>uq_ride_passengers_ride_user</code> UNIQUE (<code>ride_id</code>, <code>passenger_id</code>).</p>
+  </div>
+
+  <!-- TABLE 13, 14, 15: notifications, audit_logs, rate_limits -->
+  <div class="page-break"></div>
+  <div class="no-break">
+    <h3>4.12 notifications — User Messaging Log</h3>
+    <table class="spec-table">
+      <thead>
+        <tr><th>Column</th><th>Type</th><th>Attributes</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>id</code></td><td>UUID</td><td><span class="pill pill-pk">PK</span> default gen_random_uuid()</td><td>Notification record ID</td></tr>
+        <tr><td><code>user_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> NOT NULL → users(id)</td><td>Recipient (ON DELETE CASCADE)</td></tr>
+        <tr><td><code>type</code></td><td>notification_type</td><td>NOT NULL</td><td><code>RIDE_REQUESTED</code>, <code>REQUEST_ACCEPTED</code>, <code>REQUEST_REJECTED</code>, etc.</td></tr>
+        <tr><td><code>channel</code></td><td>notification_channel</td><td>NOT NULL DEFAULT 'IN_APP'</td><td><code>IN_APP</code>, <code>EMAIL</code>, <code>SMS</code>, <code>PUSH</code></td></tr>
+        <tr><td><code>title</code> / <code>body</code></td><td>VARCHAR / TEXT</td><td>NOT NULL</td><td>Message content delivered to user</td></tr>
+        <tr><td><code>payload_json</code></td><td>JSONB</td><td>NOT NULL DEFAULT '{}'</td><td>Action deep-links and ride metadata</td></tr>
+        <tr><td><code>read_at</code></td><td>TIMESTAMPTZ</td><td>NULLABLE</td><td>Read receipt timestamp</td></tr>
+      </tbody>
+    </table>
+    <p><strong>Indexes:</strong> <code>idx_notifications_user</code> INDEX (<code>user_id</code>, <code>read_at</code>, <code>created_at</code>).</p>
+  </div>
+
+  <div class="no-break">
+    <h3>4.13 audit_logs — Tamper-Evident Compliance Trail</h3>
+    <p>Immutable ledger of all state transitions, booking authorizations, and administrative actions.</p>
+    <table class="spec-table">
+      <thead>
+        <tr><th>Column</th><th>Type</th><th>Attributes</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>id</code></td><td>UUID</td><td><span class="pill pill-pk">PK</span> default gen_random_uuid()</td><td>Log entry ID</td></tr>
+        <tr><td><code>organization_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> NOT NULL → organizations(id)</td><td>Tenant association</td></tr>
+        <tr><td><code>actor_user_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> NULLABLE → users(id)</td><td>Actor responsible (ON DELETE SET NULL)</td></tr>
+        <tr><td><code>entity_type</code></td><td>VARCHAR(50)</td><td>NOT NULL</td><td>Target domain table (e.g. <code>rides</code>, <code>ride_requests</code>)</td></tr>
+        <tr><td><code>entity_id</code></td><td>UUID</td><td>NOT NULL</td><td>Target primary key UUID</td></tr>
+        <tr><td><code>action</code></td><td>audit_action</td><td>NOT NULL</td><td><code>CREATE</code>, <code>UPDATE</code>, <code>STATE_TRANSITION</code>, <code>DELETE</code>, <code>CANCEL</code></td></tr>
+        <tr><td><code>from_state</code> / <code>to_state</code></td><td>VARCHAR(50)</td><td>NULLABLE</td><td>State transition values if applicable</td></tr>
+        <tr><td><code>metadata_json</code></td><td>JSONB</td><td>NOT NULL DEFAULT '{}'</td><td>Structured snapshot of altered attributes</td></tr>
+        <tr><td><code>ip_address</code> / <code>user_agent</code></td><td>VARCHAR / TEXT</td><td>NULLABLE</td><td>Client network forensics</td></tr>
+      </tbody>
+    </table>
+    <p><strong>Indexes:</strong> <code>idx_audit_logs_org</code> INDEX (<code>organization_id</code>, <code>created_at</code>, <code>entity_type</code>).</p>
+  </div>
+
+  <div class="no-break">
+    <h3>4.14 rate_limits — Distributed Security Sliding Window</h3>
+    <p>Shared rate-limiting store preventing credential stuffing and API abuse across instances.</p>
+    <table class="spec-table">
+      <thead>
+        <tr><th>Column</th><th>Type</th><th>Attributes</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>key</code></td><td>VARCHAR(255)</td><td><span class="pill pill-pk">PK</span></td><td>Bucketed limit key (e.g. <code>login:127.0.0.1</code>)</td></tr>
+        <tr><td><code>count</code></td><td>INTEGER</td><td>NOT NULL DEFAULT 1</td><td>Cumulative request counter within window</td></tr>
+        <tr><td><code>reset_at</code></td><td>TIMESTAMPTZ</td><td><span class="pill pill-idx">IDX</span> NOT NULL</td><td>Window expiration timestamp</td></tr>
+        <tr><td><code>created_at</code> / <code>updated_at</code></td><td>TIMESTAMPTZ</td><td>NOT NULL DEFAULT NOW()</td><td>Creation and update timestamps</td></tr>
+      </tbody>
+    </table>
+    <p><strong>Security Invariant:</strong> In staging and production environments, the rate limiter fails closed if this table cannot be queried, ensuring zero bypass during outages.</p>
+  </div>
+
+  <!-- SECTION 5: STATE MACHINES & LIFECYCLES -->
+  <div class="page-break"></div>
+  <h2>5. State Machine Lifecycles & Transition Rules</h2>
+
+  <div class="grid-2">
+    <div class="no-break">
+      <h3>5.1 Ride Lifecycle (`rides.status`)</h3>
+      <table class="spec-table">
+        <thead><tr><th>From</th><th>To</th><th>Trigger & Side Effects</th></tr></thead>
+        <tbody>
+          <tr><td><code>DRAFT</code></td><td><code>SCHEDULED</code></td><td>Driver publishes ride; seats are made discoverable in search.</td></tr>
+          <tr><td><code>SCHEDULED</code></td><td><code>IN_PROGRESS</code></td><td>Departure time arrived; driver starts trip. No new bookings permitted.</td></tr>
+          <tr><td><code>IN_PROGRESS</code></td><td><code>COMPLETED</code></td><td>Driver completes trip; manifests finalized; audit logged.</td></tr>
+          <tr><td><code>SCHEDULED</code></td><td><code>CANCELLED</code></td><td>Driver cancels; all confirmed passengers refunded; notifications dispatched.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="no-break">
+      <h3>5.2 Ride Request Lifecycle (`ride_requests.status`)</h3>
+      <table class="spec-table">
+        <thead><tr><th>From</th><th>To</th><th>Trigger & Side Effects</th></tr></thead>
+        <tbody>
+          <tr><td><code>PENDING</code></td><td><code>ACCEPTED</code></td><td>Driver approves; <code>available_seats</code> decremented; passenger added to manifest.</td></tr>
+          <tr><td><code>PENDING</code></td><td><code>REJECTED</code></td><td>Driver declines; reason recorded; seats untouched.</td></tr>
+          <tr><td><code>PENDING</code></td><td><code>EXPIRED</code></td><td>Auto-expired by cron worker 30m before departure.</td></tr>
+          <tr><td><code>PENDING/ACCEPTED</code></td><td><code>CANCELLED</code></td><td>Rider cancels; if accepted, <code>available_seats</code> atomically incremented.</td></tr>
+          <tr><td><code>ACCEPTED</code></td><td><code>COMPLETED</code></td><td>Ride marked completed; passenger journey closed.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="footer-note">
+    Generated automatically for Corporate Carpooling Platform • Production Architecture Document • Certified PostgreSQL Schema
+  </div>
+
+</body>
+</html>

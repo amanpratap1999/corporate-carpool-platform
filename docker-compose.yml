@@ -14,10 +14,9 @@ services:
     image: postgres:15-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-carpool}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-carpool_local_pw}
       POSTGRES_DB: ${POSTGRES_DB:-carpool_db}
-    ports:
-      - "5432:5432"
+    # Internal network only; port 5432 is not exposed to host for security
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -35,7 +34,7 @@ services:
       target: builder
     command: node scripts/db-migrate.mjs
     environment:
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-carpool}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-carpool_db}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-carpool}:${POSTGRES_PASSWORD:-carpool_local_pw}@postgres:5432/${POSTGRES_DB:-carpool_db}
     depends_on:
       postgres:
         condition: service_healthy
@@ -49,11 +48,11 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=production
-      - APP_ENV=staging
+      - APP_ENV=${APP_ENV:-local}
       - STORAGE_MODE=postgres
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-carpool}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-carpool_db}
-      - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET in .env}
-      - CRON_SECRET=${CRON_SECRET:?Set CRON_SECRET in .env}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-carpool}:${POSTGRES_PASSWORD:-carpool_local_pw}@postgres:5432/${POSTGRES_DB:-carpool_db}
+      - JWT_SECRET=${JWT_SECRET:-dev_jwt_secret_32_characters_minimum_local}
+      - CRON_SECRET=${CRON_SECRET:-dev_cron_secret_32_characters_minimum_local}
       - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY:-}
       - NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=${NEXT_PUBLIC_GOOGLE_MAPS_API_KEY:-}
     depends_on:
@@ -70,21 +69,17 @@ services:
       start_period: 30s
 
   worker:
-    image: curlimages/curl:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "scripts/cron-worker.mjs"]
     depends_on:
       web:
         condition: service_healthy
     environment:
-      - CRON_SECRET=${CRON_SECRET}
-    entrypoint: >
-      /bin/sh -c "
-        while true; do
-          sleep 300;
-          curl -sf -X POST http://web:3000/api/v1/system/cron/expire
-               -H \"Authorization: Bearer $$CRON_SECRET\"
-               -H 'Content-Type: application/json' || echo 'Cron cycle failed';
-        done
-      "
+      - CRON_SECRET=${CRON_SECRET:-dev_cron_secret_32_characters_minimum_local}
+      - CRON_ENDPOINT=http://web:3000/api/v1/system/cron/expire
+      - CRON_INTERVAL_SECONDS=300
     restart: unless-stopped
 
 volumes:

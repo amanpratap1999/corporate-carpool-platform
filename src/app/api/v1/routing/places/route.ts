@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, problemResponse } from '@/services/api-context';
+import { LruCache } from '@/infrastructure/cache/lru-cache';
+
+const placesCache = new LruCache<{ predictions: any[] }>(500, 600); // 10 min TTL
 
 /**
  * GET /api/v1/routing/places?input=<query>
@@ -28,6 +31,12 @@ export async function GET(req: NextRequest) {
       'ERR_INPUT_TOO_LONG',
       req.nextUrl.pathname
     );
+  }
+
+  const cacheKey = input.trim().toLowerCase();
+  const cached = placesCache.get(cacheKey);
+  if (cached) {
+    return NextResponse.json(cached);
   }
 
   const apiKey = process.env.GOOGLE_MAPS_API_KEY;
@@ -59,6 +68,7 @@ export async function GET(req: NextRequest) {
         main_text: s.placePrediction?.structuredFormat?.mainText?.text,
         secondary_text: s.placePrediction?.structuredFormat?.secondaryText?.text,
       }));
+      placesCache.set(cacheKey, { predictions });
       return NextResponse.json({ predictions });
     }
 
@@ -95,6 +105,7 @@ export async function GET(req: NextRequest) {
       secondary_text: p.structured_formatting?.secondary_text,
     }));
 
+    placesCache.set(cacheKey, { predictions });
     return NextResponse.json({ predictions });
   } catch (err) {
     console.error('Google Places Autocomplete failed:', err);

@@ -16,7 +16,7 @@ export async function POST(
   const { id: rideId } = await params;
 
   // Rate limiting: 10 booking creations per minute per user
-  const bookingLimit = rateLimiter.check(`booking:${ctx.user.id}`, 10, 60);
+  const bookingLimit = await rateLimiter.checkShared(`booking:${ctx.user.id}`, 10, 60);
   if (!bookingLimit.allowed) {
     return problemResponse(
       429,

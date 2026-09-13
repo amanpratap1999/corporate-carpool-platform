@@ -71,6 +71,27 @@
       "when": 1789036346600,
       "tag": "0008_user_joined_notification",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1789036346601,
+      "tag": "0009_rate_limits",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1789036346602,
+      "tag": "0010_user_email_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1789036346603,
+      "tag": "0011_user_preferences",
+      "breakpoints": true
     }
   ]
 }

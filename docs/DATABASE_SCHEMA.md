@@ -626,6 +626,36 @@ CREATE TABLE audit_logs (
 CREATE INDEX idx_audit_logs_entity ON audit_logs (entity_type, entity_id);
 CREATE INDEX idx_audit_logs_actor ON audit_logs (actor_user_id, created_at DESC);
 CREATE INDEX idx_audit_logs_org_created ON audit_logs (organization_id, created_at DESC);
+
+-- ----------------------------------------------------------------------------
+-- 15. USER PREFERENCES (Personalized Commuting Traits & AI Tags)
+-- ----------------------------------------------------------------------------
+CREATE TABLE user_preferences (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
+    free_text_preferences TEXT,
+    tags TEXT[] DEFAULT '{}',
+    max_detour_minutes INTEGER DEFAULT 15,
+    quiet_ride BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_user_preferences_user ON user_preferences (user_id);
+
+-- ----------------------------------------------------------------------------
+-- 16. RATE LIMITS (Distributed Sliding-Window Store)
+-- ----------------------------------------------------------------------------
+CREATE TABLE rate_limits (
+    key VARCHAR(255) PRIMARY KEY,
+    count INTEGER NOT NULL DEFAULT 1,
+    reset_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_rate_limits_reset_at ON rate_limits (reset_at);
 ```
 
 ---

@@ -1,0 +1,19 @@
+version: '3.8'
+
+# Staging override for Corporate Carpooling Platform
+# Usage: docker compose -f docker-compose.yml -f docker-compose.staging.yml up
+
+services:
+  postgres:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD for staging in .env}
+
+  web:
+    environment:
+      - APP_ENV=staging
+      - JWT_SECRET=${JWT_SECRET:?Set JWT_SECRET for staging in .env}
+      - CRON_SECRET=${CRON_SECRET:?Set CRON_SECRET for staging in .env}
+
+  worker:
+    environment:
+      - CRON_SECRET=${CRON_SECRET:?Set CRON_SECRET for staging in .env}

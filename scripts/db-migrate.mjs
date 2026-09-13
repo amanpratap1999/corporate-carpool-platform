@@ -74,18 +74,14 @@ if (dbUrl.startsWith('pglite://') || dbUrl.startsWith('memory://')) {
     const lastApplied = appliedRows.rows.length > 0 ? Number(appliedRows.rows[0].created_at) : 0;
 
     const journalPath = join(migrationsFolder, 'meta', '_journal.json');
-    let migrationEntries = [];
-    if (existsSync(journalPath)) {
-      const journal = JSON.parse(readFileSync(journalPath, 'utf8'));
-      migrationEntries = journal.entries;
-    } else {
-      const files = readdirSync(migrationsFolder).filter(f => f.endsWith('.sql')).sort();
-      migrationEntries = files.map((f, idx) => ({
-        idx,
-        tag: f.replace(/\.sql$/, ''),
-        when: idx + 1,
-      }));
+    if (!existsSync(journalPath)) {
+      throw new Error(
+        `Migration journal not found at ${journalPath}. ` +
+        `PGlite migration requires migrations/meta/_journal.json to guarantee deterministic migration ordering.`
+      );
     }
+    const journal = JSON.parse(readFileSync(journalPath, 'utf8'));
+    const migrationEntries = journal.entries;
 
     let appliedCount = 0;
     for (const entry of migrationEntries) {

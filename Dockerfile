@@ -21,15 +21,15 @@ ENV NODE_ENV=production
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs
 
-# Copy Next.js standalone output
-COPY --from=builder /app/public ./public
+# Copy Next.js standalone output (already includes traced minimal node_modules)
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
-# Copy migrations so they can be run at startup
-COPY --from=builder /app/migrations ./migrations
-COPY --from=builder /app/drizzle.config.ts ./drizzle.config.ts
-COPY --from=builder /app/node_modules ./node_modules
+# Copy migrations and migration scripts
+COPY --from=builder --chown=nextjs:nodejs /app/migrations ./migrations
+COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
+COPY --from=builder --chown=nextjs:nodejs /app/drizzle.config.ts ./drizzle.config.ts
 
 USER nextjs
 
