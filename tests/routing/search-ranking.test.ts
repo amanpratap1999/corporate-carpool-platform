@@ -76,6 +76,7 @@ describe('Search Time-Window Filtering, Authoritative Invariants & Deterministic
     url.searchParams.set('dest_lat', '37.422');
     url.searchParams.set('dest_lng', '-122.0841');
     url.searchParams.set('date', tomorrowStr);
+    url.searchParams.set('time_zone', 'UTC');
     url.searchParams.set('window_start', '08:00');
     url.searchParams.set('window_end', '08:30');
 
@@ -99,6 +100,7 @@ describe('Search Time-Window Filtering, Authoritative Invariants & Deterministic
     url.searchParams.set('dest_lat', '37.422');
     url.searchParams.set('dest_lng', '-122.0841');
     url.searchParams.set('date', tomorrowStr);
+    url.searchParams.set('time_zone', 'UTC');
     url.searchParams.set('window_start', '11:00');
     url.searchParams.set('window_end', '12:00');
 
@@ -120,6 +122,7 @@ describe('Search Time-Window Filtering, Authoritative Invariants & Deterministic
     url.searchParams.set('dest_lat', '37.422');
     url.searchParams.set('dest_lng', '-122.0841');
     url.searchParams.set('date', tomorrowStr);
+    url.searchParams.set('time_zone', 'UTC');
     url.searchParams.set('window_start', '08:00');
     url.searchParams.set('window_end', '10:00');
     url.searchParams.set('target_time', `${tomorrowStr}T09:30:00Z`);

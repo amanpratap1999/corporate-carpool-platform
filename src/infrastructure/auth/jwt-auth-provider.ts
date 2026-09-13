@@ -130,4 +130,22 @@ export class JwtAuthProvider implements IAuthenticationProvider {
       return null;
     }
   }
+
+  public async generateToken(params: {
+    userId: string;
+    orgId: string;
+    role?: string;
+    email?: string;
+  }): Promise<string> {
+    return this.signToken({
+      userId: params.userId,
+      organizationId: params.orgId,
+      email: params.email || 'user@example.com',
+      capabilities: {
+        can_ride: true,
+        can_drive: true,
+        is_org_admin: params.role === 'admin',
+      },
+    });
+  }
 }

@@ -23,7 +23,7 @@ import { RideRequestStateMachine } from "../domain/state-machines/ride-request-s
 import { calculateHaversineDistanceMeters } from "../domain/geo";
 import { isRideOnServiceDate, matchCorridor, SearchDiagnostics } from "../domain/routing/corridor-matcher";
 import crypto from "node:crypto";
-import { ActivationError, CorridorSearchResult } from "./repository.interface";
+import { ActivationError, ConcurrencyConflictError, CorridorSearchResult } from "./repository.interface";
 
 const DATE_FIELDS = new Set([
   'created_at',
@@ -536,17 +536,41 @@ export class PostgresStore {
     type: Notification["type"],
     title: string,
     body: string,
-    payload: Record<string, unknown> = {}
+    payload: Record<string, unknown> = {},
+    channel: Notification["channel"] = "IN_APP"
   ): Promise<void> {
+    let targetChannel: Notification["channel"] = channel;
+    const finalPayload = { ...payload };
+
+    if (channel !== "IN_APP") {
+      const emailConfigured = Boolean(process.env.SMTP_HOST || process.env.SENDGRID_API_KEY || process.env.EMAIL_PROVIDER);
+      const smsConfigured = Boolean(process.env.TWILIO_ACCOUNT_SID || process.env.SMS_PROVIDER);
+      const pushConfigured = Boolean(process.env.FCM_SERVER_KEY || process.env.PUSH_PROVIDER);
+
+      const isConfigured =
+        (channel === "EMAIL" && emailConfigured) ||
+        (channel === "SMS" && smsConfigured) ||
+        (channel === "PUSH" && pushConfigured);
+
+      if (!isConfigured) {
+        targetChannel = "IN_APP";
+        finalPayload._fallback = {
+          requested_channel: channel,
+          delivery_status: "simulated_fallback",
+          reason: `External provider for ${channel} is not configured in environment.`
+        };
+      }
+    }
+
     const notification: Notification = {
       id: crypto.randomUUID(),
       organization_id: orgId,
       user_id: userId,
       type,
-      channel: "IN_APP",
+      channel: targetChannel,
       title,
       body,
-      payload_json: payload,
+      payload_json: finalPayload,
       sent_at: new Date().toISOString(),
       created_at: new Date().toISOString(),
       read_at: null as any,
@@ -714,16 +738,31 @@ export class PostgresStore {
       // 4. State machine transition
       const { updatedRequest, updatedRide } = RideRequestStateMachine.accept(request, ride);
 
-      // 5. Update DB inside transaction
-      await tx
+      // 5. Update DB inside transaction with OCC version check
+      const newRideVersion = (ride.version || 1) + 1;
+      const newReqVersion = (request.version || 1) + 1;
+      const rideToSave = { ...updatedRide, version: newRideVersion, updated_at: new Date().toISOString() };
+      const reqToSave = { ...updatedRequest, version: newReqVersion, updated_at: new Date().toISOString() };
+
+      const updatedRideRows = await tx
         .update(schema.rides)
-        .set(toSqlDates(updatedRide) as any)
-        .where(eq(schema.rides.id, ride.id));
+        .set(toSqlDates(rideToSave) as any)
+        .where(and(eq(schema.rides.id, ride.id), eq(schema.rides.version, ride.version)))
+        .returning({ id: schema.rides.id });
+
+      if (updatedRideRows.length === 0) {
+        throw new ConcurrencyConflictError("Ride was updated concurrently. Please retry.");
+      }
         
-      await tx
+      const updatedReqRows = await tx
         .update(schema.rideRequests)
-        .set(toSqlDates(updatedRequest) as any)
-        .where(eq(schema.rideRequests.id, request.id));
+        .set(toSqlDates(reqToSave) as any)
+        .where(and(eq(schema.rideRequests.id, request.id), eq(schema.rideRequests.version, request.version)))
+        .returning({ id: schema.rideRequests.id });
+
+      if (updatedReqRows.length === 0) {
+        throw new ConcurrencyConflictError("Ride request was updated concurrently. Please retry.");
+      }
 
       const passengerEntry: RidePassenger = {
         id: crypto.randomUUID(),
@@ -739,7 +778,7 @@ export class PostgresStore {
         .insert(schema.ridePassengers)
         .values(toSqlDates(passengerEntry) as any);
 
-      return { request: updatedRequest, ride: updatedRide };
+      return { request: reqToSave, ride: rideToSave };
     });
 
     await this.logAudit(
@@ -765,7 +804,7 @@ export class PostgresStore {
     return result;
   }
 
-  public async rejectRideRequest(requestId: UUID, actorId: UUID, reason?: string): Promise<{ request: RideRequest; ride: Ride }> {
+  public async rejectRideRequestWithPessimisticLock(requestId: UUID, actorId: UUID, reason?: string): Promise<{ request: RideRequest; ride: Ride }> {
     const db = getDb();
     if (!db) throw new Error("Database not initialized");
 
@@ -797,12 +836,20 @@ export class PostgresStore {
       }
 
       const updatedRequest = RideRequestStateMachine.reject(request, reason);
-      await tx
-        .update(schema.rideRequests)
-        .set(toSqlDates(updatedRequest) as any)
-        .where(eq(schema.rideRequests.id, request.id));
+      const newReqVersion = (request.version || 1) + 1;
+      const reqToSave = { ...updatedRequest, version: newReqVersion, updated_at: new Date().toISOString() };
 
-      return { request: updatedRequest, ride };
+      const updatedReqRows = await tx
+        .update(schema.rideRequests)
+        .set(toSqlDates(reqToSave) as any)
+        .where(and(eq(schema.rideRequests.id, request.id), eq(schema.rideRequests.version, request.version)))
+        .returning({ id: schema.rideRequests.id });
+
+      if (updatedReqRows.length === 0) {
+        throw new ConcurrencyConflictError("Ride request was updated concurrently. Please retry.");
+      }
+
+      return { request: reqToSave, ride };
     });
 
     await this.logAudit(
@@ -828,7 +875,11 @@ export class PostgresStore {
     return result;
   }
 
-  public async cancelRideRequest(requestId: UUID, actorId: UUID, reason?: string): Promise<{ request: RideRequest; ride: Ride }> {
+  public async rejectRideRequest(requestId: UUID, actorId: UUID, reason?: string): Promise<{ request: RideRequest; ride: Ride }> {
+    return this.rejectRideRequestWithPessimisticLock(requestId, actorId, reason);
+  }
+
+  public async cancelRideRequestWithPessimisticLock(requestId: UUID, actorId: UUID, reason?: string): Promise<{ request: RideRequest; ride: Ride }> {
     const db = getDb();
     if (!db) throw new Error("Database not initialized");
 
@@ -861,16 +912,30 @@ export class PostgresStore {
 
       const wasAccepted = request.status === "ACCEPTED";
       const { updatedRequest, updatedRide } = RideRequestStateMachine.cancel(request, ride, reason);
+      const newRideVersion = (ride.version || 1) + 1;
+      const newReqVersion = (request.version || 1) + 1;
+      const rideToSave = { ...updatedRide, version: newRideVersion, updated_at: new Date().toISOString() };
+      const reqToSave = { ...updatedRequest, version: newReqVersion, updated_at: new Date().toISOString() };
 
-      await tx
+      const updatedRideRows = await tx
         .update(schema.rides)
-        .set(toSqlDates(updatedRide) as any)
-        .where(eq(schema.rides.id, ride.id));
+        .set(toSqlDates(rideToSave) as any)
+        .where(and(eq(schema.rides.id, ride.id), eq(schema.rides.version, ride.version)))
+        .returning({ id: schema.rides.id });
 
-      await tx
+      if (updatedRideRows.length === 0) {
+        throw new ConcurrencyConflictError("Ride was updated concurrently. Please retry.");
+      }
+
+      const updatedReqRows = await tx
         .update(schema.rideRequests)
-        .set(toSqlDates(updatedRequest) as any)
-        .where(eq(schema.rideRequests.id, request.id));
+        .set(toSqlDates(reqToSave) as any)
+        .where(and(eq(schema.rideRequests.id, request.id), eq(schema.rideRequests.version, request.version)))
+        .returning({ id: schema.rideRequests.id });
+
+      if (updatedReqRows.length === 0) {
+        throw new ConcurrencyConflictError("Ride request was updated concurrently. Please retry.");
+      }
 
       if (wasAccepted) {
         await tx
@@ -878,7 +943,7 @@ export class PostgresStore {
           .where(eq(schema.ridePassengers.ride_request_id, request.id));
       }
 
-      return { request: updatedRequest, ride: updatedRide, wasAccepted };
+      return { request: reqToSave, ride: rideToSave, wasAccepted };
     });
 
     await this.logAudit(
@@ -905,7 +970,11 @@ export class PostgresStore {
     return { request: result.request, ride: result.ride };
   }
 
-  public async startRide(rideId: UUID, actorId: UUID): Promise<Ride> {
+  public async cancelRideRequest(requestId: UUID, actorId: UUID, reason?: string): Promise<{ request: RideRequest; ride: Ride }> {
+    return this.cancelRideRequestWithPessimisticLock(requestId, actorId, reason);
+  }
+
+  public async startRideWithPessimisticLock(rideId: UUID, actorId: UUID): Promise<Ride> {
     const db = getDb();
     if (!db) throw new Error("Database not initialized");
 
@@ -921,10 +990,18 @@ export class PostgresStore {
       if (ride.status !== "SCHEDULED") throw new Error(`Cannot start ride in ${ride.status} status.`);
 
       const updatedRide = RideStateMachine.startRide(ride);
-      await tx
+      const newRideVersion = (ride.version || 1) + 1;
+      const rideToSave = { ...updatedRide, version: newRideVersion, updated_at: new Date().toISOString() };
+
+      const updatedRideRows = await tx
         .update(schema.rides)
-        .set(toSqlDates(updatedRide) as any)
-        .where(eq(schema.rides.id, ride.id));
+        .set(toSqlDates(rideToSave) as any)
+        .where(and(eq(schema.rides.id, ride.id), eq(schema.rides.version, ride.version)))
+        .returning({ id: schema.rides.id });
+
+      if (updatedRideRows.length === 0) {
+        throw new ConcurrencyConflictError("Ride was updated concurrently. Please retry.");
+      }
 
       const reqRows = await tx
         .select()
@@ -932,7 +1009,7 @@ export class PostgresStore {
         .where(and(eq(schema.rideRequests.ride_id, rideId), eq(schema.rideRequests.status, "ACCEPTED")));
       const acceptedRequests = reqRows.map(normalizeRideRequest);
 
-      return { updatedRide, acceptedRequests };
+      return { updatedRide: rideToSave, acceptedRequests };
     });
 
     await this.logAudit(
@@ -959,7 +1036,11 @@ export class PostgresStore {
     return result.updatedRide;
   }
 
-  public async completeRide(rideId: UUID, actorId: UUID): Promise<Ride> {
+  public async startRide(rideId: UUID, actorId: UUID): Promise<Ride> {
+    return this.startRideWithPessimisticLock(rideId, actorId);
+  }
+
+  public async completeRideWithPessimisticLock(rideId: UUID, actorId: UUID): Promise<Ride> {
     const db = getDb();
     if (!db) throw new Error("Database not initialized");
 
@@ -975,10 +1056,18 @@ export class PostgresStore {
       if (ride.status !== "IN_PROGRESS") throw new Error(`Cannot complete ride in ${ride.status} status.`);
 
       const uRide = RideStateMachine.completeRide(ride);
-      await tx
+      const newRideVersion = (ride.version || 1) + 1;
+      const rideToSave = { ...uRide, version: newRideVersion, updated_at: new Date().toISOString() };
+
+      const updatedRideRows = await tx
         .update(schema.rides)
-        .set(toSqlDates(uRide) as any)
-        .where(eq(schema.rides.id, ride.id));
+        .set(toSqlDates(rideToSave) as any)
+        .where(and(eq(schema.rides.id, ride.id), eq(schema.rides.version, ride.version)))
+        .returning({ id: schema.rides.id });
+
+      if (updatedRideRows.length === 0) {
+        throw new ConcurrencyConflictError("Ride was updated concurrently. Please retry.");
+      }
 
       const reqRows = await tx
         .select()
@@ -987,14 +1076,18 @@ export class PostgresStore {
         .for('update');
 
       for (const rawReq of reqRows) {
-        const completedReq = RideRequestStateMachine.complete(normalizeRideRequest(rawReq));
+        const currentReq = normalizeRideRequest(rawReq);
+        const completedReq = RideRequestStateMachine.complete(currentReq);
+        const newReqVersion = (currentReq.version || 1) + 1;
+        const reqToSave = { ...completedReq, version: newReqVersion, updated_at: new Date().toISOString() };
+
         await tx
           .update(schema.rideRequests)
-          .set(toSqlDates(completedReq) as any)
-          .where(eq(schema.rideRequests.id, completedReq.id));
+          .set(toSqlDates(reqToSave) as any)
+          .where(and(eq(schema.rideRequests.id, completedReq.id), eq(schema.rideRequests.version, currentReq.version)));
       }
 
-      return uRide;
+      return rideToSave;
     });
 
     await this.logAudit(
@@ -1010,7 +1103,11 @@ export class PostgresStore {
     return updatedRide;
   }
 
-  public async cancelRide(rideId: UUID, actorId: UUID, reason: string): Promise<Ride> {
+  public async completeRide(rideId: UUID, actorId: UUID): Promise<Ride> {
+    return this.completeRideWithPessimisticLock(rideId, actorId);
+  }
+
+  public async cancelRideWithPessimisticLock(rideId: UUID, actorId: UUID, reason: string): Promise<Ride> {
     const db = getDb();
     if (!db) throw new Error("Database not initialized");
 
@@ -1028,10 +1125,18 @@ export class PostgresStore {
       }
 
       const updatedRide = RideStateMachine.cancelRide(ride, reason);
-      await tx
+      const newRideVersion = (ride.version || 1) + 1;
+      const rideToSave = { ...updatedRide, version: newRideVersion, updated_at: new Date().toISOString() };
+
+      const updatedRideRows = await tx
         .update(schema.rides)
-        .set(toSqlDates(updatedRide) as any)
-        .where(eq(schema.rides.id, ride.id));
+        .set(toSqlDates(rideToSave) as any)
+        .where(and(eq(schema.rides.id, ride.id), eq(schema.rides.version, ride.version)))
+        .returning({ id: schema.rides.id });
+
+      if (updatedRideRows.length === 0) {
+        throw new ConcurrencyConflictError("Ride was updated concurrently. Please retry.");
+      }
 
       const reqRows = await tx
         .select()
@@ -1046,19 +1151,23 @@ export class PostgresStore {
 
       const notifiedRequests: RideRequest[] = [];
       for (const rawReq of reqRows) {
+        const currentReq = normalizeRideRequest(rawReq);
         const { updatedRequest } = RideRequestStateMachine.cancel(
-          normalizeRideRequest(rawReq),
+          currentReq,
           ride,
           "Driver cancelled trip: " + reason
         );
+        const newReqVersion = (currentReq.version || 1) + 1;
+        const reqToSave = { ...updatedRequest, version: newReqVersion, updated_at: new Date().toISOString() };
+
         await tx
           .update(schema.rideRequests)
-          .set(toSqlDates(updatedRequest) as any)
-          .where(eq(schema.rideRequests.id, updatedRequest.id));
-        notifiedRequests.push(updatedRequest);
+          .set(toSqlDates(reqToSave) as any)
+          .where(and(eq(schema.rideRequests.id, updatedRequest.id), eq(schema.rideRequests.version, currentReq.version)));
+        notifiedRequests.push(reqToSave);
       }
 
-      return { updatedRide, notifiedRequests };
+      return { updatedRide: rideToSave, notifiedRequests };
     });
 
     for (const req of result.notifiedRequests) {
@@ -1084,6 +1193,10 @@ export class PostgresStore {
     );
 
     return result.updatedRide;
+  }
+
+  public async cancelRide(rideId: UUID, actorId: UUID, reason: string): Promise<Ride> {
+    return this.cancelRideWithPessimisticLock(rideId, actorId, reason);
   }
 
   public async activateUserWithPessimisticLock(
@@ -1274,6 +1387,30 @@ export class PostgresStore {
     if (!db) throw new Error("Database not initialized");
 
     await withTransaction(async (tx) => {
+      // In-transaction validation of vehicle ownership, tenant isolation, active status, and capacity
+      const vehRows = await tx
+        .select()
+        .from(schema.vehicles)
+        .where(eq(schema.vehicles.id, ride.vehicle_id))
+        .for('update');
+      const vehicleRow = vehRows[0];
+      if (!vehicleRow) {
+        throw new Error("Vehicle not found.");
+      }
+      if (vehicleRow.organization_id !== ride.organization_id) {
+        throw new Error("Tenant isolation violation: Vehicle belongs to a different organization.");
+      }
+      if (vehicleRow.owner_id !== ride.driver_id) {
+        throw new Error("Unauthorized: Driver is not the registered owner of this vehicle.");
+      }
+      if (vehicleRow.status !== "ACTIVE") {
+        throw new Error("Cannot publish ride with inactive or suspended vehicle.");
+      }
+      const maxCap = vehicleRow.max_passenger_capacity || Math.max(1, Number(vehicleRow.total_seats) - 1);
+      if (ride.total_seats_offered > maxCap) {
+        throw new Error(`Capacity exceeded: Vehicle allows maximum ${maxCap} passenger seats.`);
+      }
+
       await tx.insert(schema.rides).values(toSqlDates(ride) as any);
       await tx.insert(schema.rideRoutes).values(toSqlDates(route) as any);
       if (waypoints.length > 0) {
@@ -1323,10 +1460,18 @@ export class PostgresStore {
       if (departureMs >= Date.now()) return null; // Not yet departed
 
       const updatedRequest = RideRequestStateMachine.expire(request);
-      await tx
+      const newReqVersion = (request.version || 1) + 1;
+      const reqToSave = { ...updatedRequest, version: newReqVersion, updated_at: new Date().toISOString() };
+
+      const updatedReqRows = await tx
         .update(schema.rideRequests)
-        .set(toSqlDates(updatedRequest) as any)
-        .where(eq(schema.rideRequests.id, request.id));
+        .set(toSqlDates(reqToSave) as any)
+        .where(and(eq(schema.rideRequests.id, request.id), eq(schema.rideRequests.version, request.version)))
+        .returning({ id: schema.rideRequests.id });
+
+      if (updatedReqRows.length === 0) {
+        return null;
+      }
 
       await tx.insert(schema.auditLogs).values({
         id: crypto.randomUUID(),
@@ -1341,7 +1486,7 @@ export class PostgresStore {
         created_at: new Date(),
       });
 
-      return { request: updatedRequest, ride };
+      return { request: reqToSave, ride };
     });
 
     if (!result) return false;
@@ -1372,10 +1517,18 @@ export class PostgresStore {
       if (!ride || ride.status !== 'SCHEDULED') return null;
 
       const updatedRide = RideStateMachine.cancelRide(ride, reason);
-      await tx
+      const newRideVersion = (ride.version || 1) + 1;
+      const rideToSave = { ...updatedRide, version: newRideVersion, updated_at: new Date().toISOString() };
+
+      const updatedRideRows = await tx
         .update(schema.rides)
-        .set(toSqlDates(updatedRide) as any)
-        .where(eq(schema.rides.id, ride.id));
+        .set(toSqlDates(rideToSave) as any)
+        .where(and(eq(schema.rides.id, ride.id), eq(schema.rides.version, ride.version)))
+        .returning({ id: schema.rides.id });
+
+      if (updatedRideRows.length === 0) {
+        return null;
+      }
 
       const reqRows = await tx
         .select()
@@ -1392,17 +1545,20 @@ export class PostgresStore {
       for (const rawReq of reqRows) {
         const req = normalizeRideRequest(rawReq);
         const { updatedRequest } = RideRequestStateMachine.cancel(req, ride, reason);
+        const newReqVersion = (req.version || 1) + 1;
+        const reqToSave = { ...updatedRequest, version: newReqVersion, updated_at: new Date().toISOString() };
+
         await tx
           .update(schema.rideRequests)
-          .set(toSqlDates(updatedRequest) as any)
-          .where(eq(schema.rideRequests.id, req.id));
+          .set(toSqlDates(reqToSave) as any)
+          .where(and(eq(schema.rideRequests.id, req.id), eq(schema.rideRequests.version, req.version)));
 
         if (req.status === 'ACCEPTED') {
           await tx
             .delete(schema.ridePassengers)
             .where(eq(schema.ridePassengers.ride_request_id, req.id));
         }
-        cancelledRequests.push(updatedRequest);
+        cancelledRequests.push(reqToSave);
       }
 
       await tx.insert(schema.auditLogs).values({
@@ -1418,7 +1574,7 @@ export class PostgresStore {
         created_at: new Date(),
       });
 
-      return { ride: updatedRide, cancelledRequests };
+      return { ride: rideToSave, cancelledRequests };
     });
 
     if (!result) return false;

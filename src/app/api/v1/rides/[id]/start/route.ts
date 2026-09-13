@@ -26,7 +26,7 @@ export async function POST(
   }
 
   try {
-    const updatedRide = await store.startRide(id, ctx.user.id);
+    const updatedRide = await store.startRideWithPessimisticLock(id, ctx.user.id);
     return NextResponse.json({ ride: updatedRide });
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : 'Unknown error';

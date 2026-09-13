@@ -184,6 +184,7 @@ export interface PickupPoint {
   id: UUID;
   organization_id: UUID;
   passenger_id: UUID;
+  source_location_id?: UUID;
   address_text: string;
   latitude: number;
   longitude: number;
@@ -195,6 +196,7 @@ export interface DropPoint {
   id: UUID;
   organization_id: UUID;
   passenger_id: UUID;
+  source_location_id?: UUID;
   address_text: string;
   latitude: number;
   longitude: number;

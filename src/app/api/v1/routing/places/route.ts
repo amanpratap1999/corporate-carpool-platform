@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, problemResponse } from '@/services/api-context';
 import { LruCache } from '@/infrastructure/cache/lru-cache';
+import { rateLimiter } from '@/infrastructure/security/rate-limiter';
 
 const placesCache = new LruCache<{ predictions: any[] }>(500, 600); // 10 min TTL
 
@@ -13,6 +14,19 @@ const placesCache = new LruCache<{ predictions: any[] }>(500, 600); // 10 min TT
 export async function GET(req: NextRequest) {
   const auth = await requireAuth(req);
   if (!auth.success) return auth.response;
+
+  // Rate limiting: 60 places searches per minute per user
+  const placesLimit = await rateLimiter.checkShared(`places:${auth.ctx.user.id}`, 60, 60);
+  if (!placesLimit.allowed) {
+    return problemResponse(
+      429,
+      'Too Many Requests',
+      `Places search rate limit exceeded. Retry in ${placesLimit.resetSeconds}s`,
+      'ERR_RATE_LIMIT_EXCEEDED',
+      req.nextUrl.pathname,
+      { 'Retry-After': String(placesLimit.resetSeconds) }
+    );
+  }
 
   const input = req.nextUrl.searchParams.get('input');
   if (!input || input.trim().length < 2) {

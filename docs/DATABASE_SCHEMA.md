@@ -64,12 +64,17 @@ erDiagram
         timestamptz created_at
     }
 
+    USER_LOCATIONS ||--o{ PICKUP_POINTS : "sources"
+    USER_LOCATIONS ||--o{ DROP_POINTS : "sources"
+
     USERS {
         uuid id PK
         uuid organization_id FK
         varchar email
         varchar full_name
         varchar phone_number
+        varchar avatar_url
+        varchar external_idp_sub
         user_status status
         varchar work_department
         timestamptz created_at
@@ -155,6 +160,7 @@ erDiagram
         uuid id PK
         uuid organization_id FK
         uuid passenger_id FK
+        uuid source_location_id FK
         text address_text
         decimal latitude
         decimal longitude
@@ -165,6 +171,7 @@ erDiagram
         uuid id PK
         uuid organization_id FK
         uuid passenger_id FK
+        uuid source_location_id FK
         text address_text
         decimal latitude
         decimal longitude
@@ -326,9 +333,13 @@ CREATE TABLE users (
     full_name VARCHAR(255) NOT NULL,
     phone_number VARCHAR(50),
     avatar_url TEXT,
+    external_idp_sub VARCHAR(255),
     status user_status NOT NULL DEFAULT 'ACTIVE',
     work_department VARCHAR(100),
     work_location VARCHAR(150),
+    password_hash TEXT,
+    invitation_token VARCHAR(100),
+    invitation_token_expires_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_users_org_email UNIQUE (organization_id, email)
@@ -336,6 +347,8 @@ CREATE TABLE users (
 
 CREATE INDEX idx_users_org_status ON users (organization_id, status);
 CREATE INDEX idx_users_email ON users (email);
+CREATE UNIQUE INDEX idx_users_org_lower_email ON users (organization_id, lower(email));
+CREATE UNIQUE INDEX idx_users_invitation_token ON users (invitation_token) WHERE invitation_token IS NOT NULL;
 
 -- ----------------------------------------------------------------------------
 -- 4. USER CAPABILITIES (Role-Based Permissions & Driver Flags)
@@ -431,6 +444,8 @@ CREATE TABLE rides (
 
 CREATE INDEX idx_rides_org_search ON rides (organization_id, status, departure_time) 
     WHERE status = 'SCHEDULED';
+CREATE INDEX idx_rides_org_departure_scheduled ON rides (organization_id, departure_time) 
+    WHERE status = 'SCHEDULED';
 CREATE INDEX idx_rides_driver ON rides (driver_id, departure_time);
 CREATE INDEX idx_rides_vehicle ON rides (vehicle_id);
 
@@ -503,6 +518,7 @@ CREATE TABLE pickup_points (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
     passenger_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    source_location_id UUID REFERENCES user_locations(id) ON DELETE SET NULL,
     address_text TEXT NOT NULL,
     latitude DECIMAL(10, 7) NOT NULL,
     longitude DECIMAL(10, 7) NOT NULL,
@@ -515,11 +531,13 @@ CREATE TABLE pickup_points (
 
 CREATE INDEX idx_pickup_points_user ON pickup_points (passenger_id);
 CREATE INDEX idx_pickup_points_org ON pickup_points (organization_id);
+CREATE INDEX idx_pickup_points_source_location ON pickup_points (source_location_id);
 
 CREATE TABLE drop_points (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE RESTRICT,
     passenger_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    source_location_id UUID REFERENCES user_locations(id) ON DELETE SET NULL,
     address_text TEXT NOT NULL,
     latitude DECIMAL(10, 7) NOT NULL,
     longitude DECIMAL(10, 7) NOT NULL,
@@ -532,6 +550,7 @@ CREATE TABLE drop_points (
 
 CREATE INDEX idx_drop_points_user ON drop_points (passenger_id);
 CREATE INDEX idx_drop_points_org ON drop_points (organization_id);
+CREATE INDEX idx_drop_points_source_location ON drop_points (source_location_id);
 
 -- ----------------------------------------------------------------------------
 -- 11. RIDE REQUESTS (Passenger Booking Bids)
@@ -656,6 +675,36 @@ CREATE TABLE rate_limits (
 );
 
 CREATE INDEX idx_rate_limits_reset_at ON rate_limits (reset_at);
+
+-- ----------------------------------------------------------------------------
+-- 17. AUTOMATED UPDATED_AT TRIGGERS (Database Engine Level Enforcement)
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION set_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_touch_updated_at_organizations BEFORE UPDATE ON organizations FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_touch_updated_at_users BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_touch_updated_at_user_capabilities BEFORE UPDATE ON user_capabilities FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_touch_updated_at_user_locations BEFORE UPDATE ON user_locations FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_touch_updated_at_vehicles BEFORE UPDATE ON vehicles FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_touch_updated_at_rides BEFORE UPDATE ON rides FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_touch_updated_at_ride_routes BEFORE UPDATE ON ride_routes FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_touch_updated_at_ride_requests BEFORE UPDATE ON ride_requests FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_touch_updated_at_user_preferences BEFORE UPDATE ON user_preferences FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_touch_updated_at_rate_limits BEFORE UPDATE ON rate_limits FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- ----------------------------------------------------------------------------
+-- 18. OPTIONAL SPATIAL ACCELERATION (PostGIS Bounding-Box Polygon)
+-- Prepared in migrations/optional/001_postgis_bbox.sql
+-- ----------------------------------------------------------------------------
+-- CREATE EXTENSION IF NOT EXISTS postgis;
+-- ALTER TABLE ride_routes ADD COLUMN IF NOT EXISTS bbox_geom geometry(Polygon, 4326);
+-- CREATE INDEX IF NOT EXISTS idx_ride_routes_bbox_gist ON ride_routes USING GIST (bbox_geom);
 ```
 
 ---

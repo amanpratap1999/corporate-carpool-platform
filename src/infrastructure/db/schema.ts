@@ -253,6 +253,9 @@ export const rides = pgTable(
       table.departure_time,
       table.status
     ),
+    index('idx_rides_org_departure_scheduled')
+      .on(table.organization_id, table.departure_time)
+      .where(sql`${table.status} = 'SCHEDULED'`),
     index('idx_rides_driver').on(table.driver_id, table.departure_time),
     check('chk_available_seats_non_negative', sql`available_seats >= 0`),
     check('chk_available_seats_le_total', sql`available_seats <= total_seats_offered`),
@@ -338,6 +341,8 @@ export const pickupPoints = pgTable('pickup_points', {
   passenger_id: uuid('passenger_id')
     .notNull()
     .references(() => users.id, { onDelete: 'restrict' }),
+  source_location_id: uuid('source_location_id')
+    .references(() => userLocations.id, { onDelete: 'set null' }),
   address_text: text('address_text').notNull(),
   latitude: numeric('latitude', { precision: 10, scale: 7 }).notNull(),
   longitude: numeric('longitude', { precision: 10, scale: 7 }).notNull(),
@@ -354,6 +359,8 @@ export const dropPoints = pgTable('drop_points', {
   passenger_id: uuid('passenger_id')
     .notNull()
     .references(() => users.id, { onDelete: 'restrict' }),
+  source_location_id: uuid('source_location_id')
+    .references(() => userLocations.id, { onDelete: 'set null' }),
   address_text: text('address_text').notNull(),
   latitude: numeric('latitude', { precision: 10, scale: 7 }).notNull(),
   longitude: numeric('longitude', { precision: 10, scale: 7 }).notNull(),

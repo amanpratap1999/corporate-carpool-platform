@@ -9,6 +9,7 @@ import { setRepository } from '../../src/services/repository-factory';
 import {
   Organization, User, UserCapability, Vehicle,
   Ride, RideRoute, RouteWaypoint, RideRequest,
+  PickupPoint, DropPoint,
 } from '../../src/domain/types';
 
 export const ORG_ID    = '11111111-1111-4111-8111-111111111111';
@@ -17,6 +18,12 @@ export const SARAH_ID  = '33333333-3333-4333-8333-333333333333'; // rider
 export const DAVID_ID  = '44444444-4444-4444-8444-444444444444'; // rider
 export const EMILY_ID  = '55555555-5555-4555-8555-555555555555'; // driver
 export const MARCUS_ID = '66666666-6666-4666-8666-666666666666'; // admin
+export const VEHICLE_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+export const RIDE_A_ID  = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+export const ROUTE_A_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+export const REQ_ID     = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+export const PICKUP_ID  = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+export const DROP_ID    = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
 
 export function makeSeedStore(): DataStore {
   const store = new DataStore();
@@ -90,17 +97,31 @@ export function makeSeedStore(): DataStore {
   store.rideRoutes.set(routeA.id, routeA);
 
   const waypointsA: RouteWaypoint[] = [
-    { id: 'wp-a-0', route_id: routeAId, organization_id: ORG_ID, stop_order: 0, point_type: 'ORIGIN', estimated_arrival_offset_seconds: 0,      address_text: 'SF Market St',   latitude: 37.7749,  longitude: -122.4194,  created_at: '2026-08-01T00:00:00Z' },
-    { id: 'wp-a-1', route_id: routeAId, organization_id: ORG_ID, stop_order: 1, point_type: 'CORRIDOR', estimated_arrival_offset_seconds: 900,    address_text: 'Millbrae BART',  latitude: 37.5997,  longitude: -122.3867,  created_at: '2026-08-01T00:00:00Z' },
-    { id: 'wp-a-2', route_id: routeAId, organization_id: ORG_ID, stop_order: 2, point_type: 'DESTINATION', estimated_arrival_offset_seconds: 3300, address_text: 'Mountain View',  latitude: 37.422,   longitude: -122.0841,  created_at: '2026-08-01T00:00:00Z' },
+    { id: '66666666-0000-4000-8000-000000000000', route_id: routeAId, organization_id: ORG_ID, stop_order: 0, point_type: 'ORIGIN', estimated_arrival_offset_seconds: 0,      address_text: 'SF Market St',   latitude: 37.7749,  longitude: -122.4194,  created_at: '2026-08-01T00:00:00Z' },
+    { id: '66666666-0000-4000-8000-000000000001', route_id: routeAId, organization_id: ORG_ID, stop_order: 1, point_type: 'CORRIDOR', estimated_arrival_offset_seconds: 900,    address_text: 'Millbrae BART',  latitude: 37.5997,  longitude: -122.3867,  created_at: '2026-08-01T00:00:00Z' },
+    { id: '66666666-0000-4000-8000-000000000002', route_id: routeAId, organization_id: ORG_ID, stop_order: 2, point_type: 'DESTINATION', estimated_arrival_offset_seconds: 3300, address_text: 'Mountain View',  latitude: 37.422,   longitude: -122.0841,  created_at: '2026-08-01T00:00:00Z' },
   ];
   for (const w of waypointsA) store.routeWaypoints.set(w.id, w);
 
+  const pickupPoint: PickupPoint = {
+    id: PICKUP_ID, organization_id: ORG_ID, passenger_id: SARAH_ID,
+    address_text: 'SF Market St', latitude: 37.7749, longitude: -122.4194,
+    created_at: '2026-08-01T00:00:00Z',
+  };
+  store.pickupPoints.set(pickupPoint.id, pickupPoint);
+
+  const dropPoint: DropPoint = {
+    id: DROP_ID, organization_id: ORG_ID, passenger_id: SARAH_ID,
+    address_text: 'Mountain View', latitude: 37.422, longitude: -122.0841,
+    created_at: '2026-08-01T00:00:00Z',
+  };
+  store.dropPoints.set(dropPoint.id, dropPoint);
+
   // A seeded ride request (Sarah requesting to join Alex's ride)
-  const reqId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  const reqId = REQ_ID;
   const rideRequest: RideRequest = {
     id: reqId, organization_id: ORG_ID, ride_id: rideAId,
-    passenger_id: SARAH_ID, pickup_point_id: 'pp-1', drop_point_id: 'dp-1',
+    passenger_id: SARAH_ID, pickup_point_id: PICKUP_ID, drop_point_id: DROP_ID,
     requested_seats: 1, status: 'PENDING', version: 1,
     created_at: '2026-08-01T00:00:00Z', updated_at: '2026-08-01T00:00:00Z',
   };
@@ -208,6 +229,12 @@ export async function setupDatabaseTestRepository(): Promise<PostgresStore> {
   }
   for (const wp of seedStore.routeWaypoints.values()) {
     await pgStore.setRouteWaypoint(wp);
+  }
+  for (const pp of seedStore.pickupPoints.values()) {
+    await pgStore.setPickupPoint(pp);
+  }
+  for (const dp of seedStore.dropPoints.values()) {
+    await pgStore.setDropPoint(dp);
   }
   for (const req of seedStore.rideRequests.values()) {
     await pgStore.setRideRequest(req);

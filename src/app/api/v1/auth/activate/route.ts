@@ -6,6 +6,7 @@ import { getAuthProvider } from '@/infrastructure/auth/auth-factory';
 import { createPasswordHash } from '@/lib/password';
 
 import { ActivationError } from '@/services/repository.interface';
+import { rateLimiter } from '@/infrastructure/security/rate-limiter';
 
 /**
  * POST /api/v1/auth/activate
@@ -18,6 +19,20 @@ import { ActivationError } from '@/services/repository.interface';
  */
 export async function POST(req: NextRequest) {
   const pathname = req.nextUrl.pathname;
+
+  const forwarded = req.headers.get('x-forwarded-for');
+  const ip = (forwarded ? forwarded.split(',')[0].trim() : null) || '127.0.0.1';
+  const activateLimit = await rateLimiter.checkShared(`activate:${ip}`, 10, 60);
+  if (!activateLimit.allowed) {
+    return problemResponse(
+      429,
+      'Too Many Requests',
+      `Account activation rate limit exceeded. Retry in ${activateLimit.resetSeconds}s`,
+      'ERR_RATE_LIMIT_EXCEEDED',
+      pathname,
+      { 'Retry-After': String(activateLimit.resetSeconds) }
+    );
+  }
 
   let body: { token?: string; password?: string };
   try {

@@ -600,6 +600,8 @@
         <tr><td><code>email</code></td><td>VARCHAR(255)</td><td>NOT NULL</td><td>Corporate email address</td></tr>
         <tr><td><code>full_name</code></td><td>VARCHAR(255)</td><td>NOT NULL</td><td>Employee display name</td></tr>
         <tr><td><code>phone_number</code></td><td>VARCHAR(50)</td><td>NULLABLE</td><td>Contact phone number</td></tr>
+        <tr><td><code>avatar_url</code></td><td>TEXT</td><td>NULLABLE</td><td>CDN/storage URL for profile avatar image</td></tr>
+        <tr><td><code>external_idp_sub</code></td><td>VARCHAR(255)</td><td>NULLABLE</td><td>Subject identifier from corporate identity provider (SSO)</td></tr>
         <tr><td><code>status</code></td><td>user_status</td><td>NOT NULL DEFAULT 'ACTIVE'</td><td><code>ACTIVE</code>, <code>INACTIVE</code>, <code>SUSPENDED</code>, <code>PENDING_VERIFICATION</code></td></tr>
         <tr><td><code>work_department</code></td><td>VARCHAR(100)</td><td>NULLABLE</td><td>Employee department</td></tr>
         <tr><td><code>work_location</code></td><td>VARCHAR(255)</td><td>NULLABLE</td><td>Assigned campus or office building</td></tr>
@@ -694,7 +696,7 @@
       </tbody>
     </table>
     <p><strong>Check Constraints:</strong> <code>chk_available_seats_non_negative</code> (<code>available_seats &gt;= 0</code>), <code>chk_available_seats_le_total</code> (<code>available_seats &lt;= total_seats_offered</code>), <code>chk_total_seats_positive</code> (<code>total_seats_offered &gt; 0</code>).</p>
-    <p><strong>Indexes:</strong> <code>idx_rides_org_departure</code> (<code>organization_id</code>, <code>departure_time</code>, <code>status</code>); <code>idx_rides_driver</code> (<code>driver_id</code>, <code>departure_time</code>).</p>
+    <p><strong>Indexes:</strong> <code>idx_rides_org_departure</code> (<code>organization_id</code>, <code>departure_time</code>, <code>status</code>); <code>idx_rides_org_departure_scheduled</code> PARTIAL INDEX (<code>organization_id</code>, <code>departure_time</code>) WHERE <code>status = 'SCHEDULED'</code>; <code>idx_rides_driver</code> (<code>driver_id</code>, <code>departure_time</code>).</p>
   </div>
 
   <!-- TABLE 7 & 8: ride_routes & route_waypoints -->
@@ -748,11 +750,13 @@
         <tr><td><code>id</code></td><td>UUID</td><td><span class="pill pill-pk">PK</span> default gen_random_uuid()</td><td>Point identifier</td></tr>
         <tr><td><code>passenger_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> NOT NULL → users(id)</td><td>Commuter requesting pickup or drop</td></tr>
         <tr><td><code>organization_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> NOT NULL → organizations(id)</td><td>Tenant association</td></tr>
+        <tr><td><code>source_location_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> NULLABLE → user_locations(id)</td><td>Link to passenger's saved preset location (ON DELETE SET NULL)</td></tr>
         <tr><td><code>address_text</code></td><td>TEXT</td><td>NOT NULL</td><td>Physical street or campus address</td></tr>
         <tr><td><code>latitude</code> / <code>longitude</code></td><td>NUMERIC(10,7)</td><td>NOT NULL</td><td>Precise GPS location</td></tr>
         <tr><td><code>landmark_note</code></td><td>TEXT</td><td>NULLABLE</td><td>Visual pickup cues (e.g. "Gate 3 near cafeteria")</td></tr>
       </tbody>
     </table>
+    <p><strong>Indexes:</strong> <code>idx_pickup_points_source_location</code> (<code>source_location_id</code>); <code>idx_drop_points_source_location</code> (<code>source_location_id</code>).</p>
   </div>
 
   <div class="no-break">
@@ -767,7 +771,7 @@
         <tr><td><code>passenger_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> NOT NULL → users(id)</td><td>Commuter requesting seat</td></tr>
         <tr><td><code>pickup_point_id</code> / <code>drop_point_id</code></td><td>UUID</td><td><span class="pill pill-fk">FK</span> NOT NULL</td><td>References pickup_points / drop_points</td></tr>
         <tr><td><code>requested_seats</code></td><td>SMALLINT</td><td>NOT NULL DEFAULT 1</td><td>Number of seats requested</td></tr>
-        <tr><td><code>status</code></td><td>ride_request_status</td><td>NOT NULL DEFAULT 'PENDING'</td><td><code>PENDING</code>, <code>ACCEPTED</code>, <code>REJECTED</code>, <code>CANCELLED</code>, <code>EXPIRED</code></td></tr>
+        <tr><td><code>status</code></td><td>ride_request_status</td><td>NOT NULL DEFAULT 'PENDING'</td><td><code>PENDING</code>, <code>ACCEPTED</code>, <code>REJECTED</code>, <code>CANCELLED</code>, <code>EXPIRED</code>, <code>COMPLETED</code></td></tr>
         <tr><td><code>rider_note</code></td><td>TEXT</td><td>NULLABLE</td><td>Note to host driver</td></tr>
         <tr><td><code>version</code></td><td>INTEGER</td><td>NOT NULL DEFAULT 1</td><td>OCC version counter</td></tr>
       </tbody>
@@ -851,6 +855,12 @@
       </tbody>
     </table>
     <p><strong>Security Invariant:</strong> In staging and production environments, the rate limiter fails closed if this table cannot be queried, ensuring zero bypass during outages.</p>
+  </div>
+
+  <div class="no-break">
+    <h3>4.15 Engine Triggers & Optional Spatial Acceleration</h3>
+    <p><strong>Automated <code>updated_at</code> Triggers:</strong> Stored procedure <code>set_updated_at()</code> fires <code>BEFORE UPDATE</code> on all 10 tables with modification timestamps (<code>organizations</code>, <code>users</code>, <code>user_capabilities</code>, <code>user_locations</code>, <code>vehicles</code>, <code>rides</code>, <code>ride_routes</code>, <code>ride_requests</code>, <code>user_preferences</code>, <code>rate_limits</code>), ensuring non-null, accurate tracking independent of application-level discipline.</p>
+    <p><strong>Optional PostGIS Extension:</strong> For enterprise deployments scaling to &gt;100k routes, migration <code>migrations/optional/001_postgis_bbox.sql</code> adds <code>bbox_geom geometry(Polygon, 4326)</code> with a GIST spatial index (<code>idx_ride_routes_bbox_gist</code>) for accelerated 2D corridor intersection queries.</p>
   </div>
 
   <!-- SECTION 5: STATE MACHINES & LIFECYCLES -->

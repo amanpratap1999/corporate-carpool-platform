@@ -180,7 +180,7 @@ describe('End-to-End User & Ride Lifecycle Flow', () => {
     });
 
     const dateStr = tomorrow.toISOString().split('T')[0];
-    const searchUrl = `http://localhost:3000/api/v1/rides/search?origin_lat=37.7749&origin_lng=-122.4194&dest_lat=37.422&dest_lng=-122.0841&date=${dateStr}&window_start=07:30&window_end=09:00&seats_needed=1`;
+    const searchUrl = `http://localhost:3000/api/v1/rides/search?origin_lat=37.7749&origin_lng=-122.4194&dest_lat=37.422&dest_lng=-122.0841&date=${dateStr}&time_zone=UTC&window_start=07:30&window_end=09:00&seats_needed=1`;
     const searchReq = new NextRequest(searchUrl, {
       method: 'GET',
       headers: {

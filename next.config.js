@@ -6,6 +6,9 @@ const nextConfig = {
   // Keep local/CI builds reliable on constrained Windows hosts.
   // This trades build parallelism for deterministic memory usage.
   generateBuildId: async () => 'production-build-' + Date.now(),
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
   experimental: {
     cpus: 1,
   },

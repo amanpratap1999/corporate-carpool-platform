@@ -8,6 +8,7 @@ import {
   decodePolyline,
 } from '@/domain/types';
 import { LruCache } from '@/infrastructure/cache/lru-cache';
+import { rateLimiter } from '@/infrastructure/security/rate-limiter';
 
 const directionsCache = new LruCache<{ routes: DirectionsRouteOption[] }>(500, 300);
 
@@ -45,6 +46,19 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (!auth.success) {
     return auth.response;
+  }
+
+  // Rate limiting: 60 directions requests per minute per user
+  const dirLimit = await rateLimiter.checkShared(`directions:${auth.ctx.user.id}`, 60, 60);
+  if (!dirLimit.allowed) {
+    return problemResponse(
+      429,
+      'Too Many Requests',
+      `Directions rate limit exceeded. Retry in ${dirLimit.resetSeconds}s`,
+      'ERR_RATE_LIMIT_EXCEEDED',
+      req.nextUrl.pathname,
+      { 'Retry-After': String(dirLimit.resetSeconds) }
+    );
   }
 
   let body: DirectionsRequestBody;

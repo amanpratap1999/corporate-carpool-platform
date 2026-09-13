@@ -34,7 +34,7 @@ export async function POST(
     const body = await req.json().catch(() => ({}));
     const reason = body.reason;
 
-    const result = await store.rejectRideRequest(requestId, ctx.user.id, reason);
+    const result = await store.rejectRideRequestWithPessimisticLock(requestId, ctx.user.id, reason);
     return NextResponse.json({ request: result.request, ride: result.ride });
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : 'Unknown error';

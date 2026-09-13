@@ -67,7 +67,7 @@ describe('Gate 1: Sliding Window Rate Limiter Tests', () => {
     const origDb = process.env.DATABASE_URL;
 
     try {
-      process.env.NODE_ENV = 'production';
+      (process.env as any).NODE_ENV = 'production';
       delete process.env.STORAGE_MODE;
       delete process.env.DATABASE_URL;
 
@@ -75,7 +75,7 @@ describe('Gate 1: Sliding Window Rate Limiter Tests', () => {
       expect(res.allowed).toBe(false);
       expect(res.error).toBeDefined();
     } finally {
-      process.env.NODE_ENV = origNodeEnv;
+      (process.env as any).NODE_ENV = origNodeEnv;
       if (origStorage) process.env.STORAGE_MODE = origStorage;
       if (origDb) process.env.DATABASE_URL = origDb;
     }

@@ -92,6 +92,27 @@
       "when": 1789036346603,
       "tag": "0011_user_preferences",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1789036346604,
+      "tag": "0012_updated_at_triggers",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1789036346605,
+      "tag": "0013_active_rides_partial_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1789036346606,
+      "tag": "0014_point_source_location",
+      "breakpoints": true
     }
   ]
 }

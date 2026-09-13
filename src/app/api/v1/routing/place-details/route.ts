@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, problemResponse } from '@/services/api-context';
+import { rateLimiter } from '@/infrastructure/security/rate-limiter';
 
 const KNOWN_PRESETS: Record<string, { address: string; lat: number; lng: number; name: string }> = {
   'preset-acme-hq': {
@@ -43,6 +44,19 @@ const KNOWN_PRESETS: Record<string, { address: string; lat: number; lng: number;
 export async function GET(req: NextRequest) {
   const auth = await requireAuth(req);
   if (!auth.success) return auth.response;
+
+  // Rate limiting: 60 place details queries per minute per user
+  const detailsLimit = await rateLimiter.checkShared(`place-details:${auth.ctx.user.id}`, 60, 60);
+  if (!detailsLimit.allowed) {
+    return problemResponse(
+      429,
+      'Too Many Requests',
+      `Place details rate limit exceeded. Retry in ${detailsLimit.resetSeconds}s`,
+      'ERR_RATE_LIMIT_EXCEEDED',
+      req.nextUrl.pathname,
+      { 'Retry-After': String(detailsLimit.resetSeconds) }
+    );
+  }
 
   const placeId = req.nextUrl.searchParams.get('place_id');
   if (!placeId || placeId.trim().length === 0) {

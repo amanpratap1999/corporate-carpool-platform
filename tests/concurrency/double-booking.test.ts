@@ -4,7 +4,7 @@ import { getRepository } from '../../src/services/repository-factory';
 import { PostgresStore } from '../../src/services/postgres-store';
 import { DataStore } from '../../src/services/data-store';
 import { Ride, RideRequest } from '../../src/domain/types';
-import { setupTestRepository, setupDatabaseTestRepository, ORG_ID, ALEX_ID } from '../helpers/seed-fixture';
+import { setupTestRepository, setupDatabaseTestRepository, ORG_ID, ALEX_ID, VEHICLE_ID, PICKUP_ID, DROP_ID } from '../helpers/seed-fixture';
 
 describe('Gate 2: Concurrency & Double-Booking Prevention', () => {
   let store: IDataRepository;
@@ -30,7 +30,7 @@ describe('Gate 2: Concurrency & Double-Booking Prevention', () => {
       id: rideId,
       organization_id: ORG_ID,
       driver_id: ALEX_ID,
-      vehicle_id: 'veh-1',
+      vehicle_id: VEHICLE_ID,
       status: 'SCHEDULED',
       departure_time: new Date(Date.now() + 3600000).toISOString(),
       arrival_time_estimated: new Date(Date.now() + 7200000).toISOString(),
@@ -47,15 +47,26 @@ describe('Gate 2: Concurrency & Double-Booking Prevention', () => {
     // Create 10 distinct passenger requests for this 1 seat
     const requestIds: string[] = [];
     for (let i = 0; i < 10; i++) {
+      const passengerId = crypto.randomUUID();
+      await store.setUser({
+        id: passengerId,
+        organization_id: ORG_ID,
+        email: `passenger-${i}-${Date.now()}@acme.corp`,
+        full_name: `Concurrent Passenger ${i}`,
+        status: 'ACTIVE',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+
       const reqId = crypto.randomUUID();
       requestIds.push(reqId);
       const req: RideRequest = {
         id: reqId,
         organization_id: ORG_ID,
         ride_id: rideId,
-        passenger_id: `passenger-uuid-${i}`,
-        pickup_point_id: `pickup-${i}`,
-        drop_point_id: `drop-${i}`,
+        passenger_id: passengerId,
+        pickup_point_id: PICKUP_ID,
+        drop_point_id: DROP_ID,
         requested_seats: 1,
         status: 'PENDING',
         version: 1,

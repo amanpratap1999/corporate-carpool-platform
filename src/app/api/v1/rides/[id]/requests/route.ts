@@ -56,8 +56,8 @@ export async function POST(
       return problemResponse(409, 'Ride Not Available', `Cannot request seat on a ride in '${ride.status}' status.`, 'RIDE_NOT_AVAILABLE', `/api/v1/rides/${rideId}/requests`);
     }
 
-    // Check duplicate active request
-    const existingActive = (await store.getAllRideRequests()).find(
+    // Check duplicate active request using tenant-scoped query
+    const existingActive = (await store.getRideRequestsByOrganization(ctx.org.id)).find(
       (r) => r.ride_id === rideId && r.passenger_id === ctx.user.id && (r.status === 'PENDING' || r.status === 'ACCEPTED')
     );
     if (existingActive) {
@@ -81,12 +81,37 @@ export async function POST(
       );
     }
 
+    // Match passenger's saved locations to link source_location_id
+    const userLocations = (await store.getAllUserLocations()).filter(l => l.user_id === ctx.user.id);
+    let pickupSourceId: string | undefined = pickup_point.source_location_id || pickup_point.user_location_id;
+    if (!pickupSourceId) {
+      const pLat = Number(pickup_point.latitude);
+      const pLng = Number(pickup_point.longitude);
+      const matched = userLocations.find(l =>
+        Math.abs(Number(l.latitude) - pLat) < 0.0001 &&
+        Math.abs(Number(l.longitude) - pLng) < 0.0001
+      );
+      if (matched) pickupSourceId = matched.id;
+    }
+
+    let dropSourceId: string | undefined = drop_point.source_location_id || drop_point.user_location_id;
+    if (!dropSourceId) {
+      const dLat = Number(drop_point.latitude);
+      const dLng = Number(drop_point.longitude);
+      const matched = userLocations.find(l =>
+        Math.abs(Number(l.latitude) - dLat) < 0.0001 &&
+        Math.abs(Number(l.longitude) - dLng) < 0.0001
+      );
+      if (matched) dropSourceId = matched.id;
+    }
+
     // 1. Create PickupPoint entity
     const pickupId = crypto.randomUUID();
     const pickup: PickupPoint = {
       id: pickupId,
       organization_id: ctx.org.id,
       passenger_id: ctx.user.id,
+      source_location_id: pickupSourceId,
       address_text: pickup_point.address_text,
       latitude: Number(pickup_point.latitude),
       longitude: Number(pickup_point.longitude),
@@ -101,6 +126,7 @@ export async function POST(
       id: dropId,
       organization_id: ctx.org.id,
       passenger_id: ctx.user.id,
+      source_location_id: dropSourceId,
       address_text: drop_point.address_text,
       latitude: Number(drop_point.latitude),
       longitude: Number(drop_point.longitude),

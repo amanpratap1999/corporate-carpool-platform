@@ -25,7 +25,7 @@ import {
 } from '../domain/types';
 import { RideStateMachine } from '../domain/state-machines/ride-state-machine';
 import { RideRequestStateMachine } from '../domain/state-machines/ride-request-state-machine';
-import { IDataRepository, CorridorSearchResult, ActivationError } from './repository.interface';
+import { IDataRepository, CorridorSearchResult, ActivationError, ConcurrencyConflictError } from './repository.interface';
 import crypto from 'node:crypto';
 
 
@@ -177,17 +177,41 @@ export class DataStore implements IDataRepository {
     type: Notification['type'],
     title: string,
     body: string,
-    payload: Record<string, unknown> = {}
+    payload: Record<string, unknown> = {},
+    channel: Notification['channel'] = 'IN_APP'
   ): Promise<void> {
+    let targetChannel: Notification['channel'] = channel;
+    const finalPayload = { ...payload };
+
+    if (channel !== 'IN_APP') {
+      const emailConfigured = Boolean(process.env.SMTP_HOST || process.env.SENDGRID_API_KEY || process.env.EMAIL_PROVIDER);
+      const smsConfigured = Boolean(process.env.TWILIO_ACCOUNT_SID || process.env.SMS_PROVIDER);
+      const pushConfigured = Boolean(process.env.FCM_SERVER_KEY || process.env.PUSH_PROVIDER);
+
+      const isConfigured =
+        (channel === 'EMAIL' && emailConfigured) ||
+        (channel === 'SMS' && smsConfigured) ||
+        (channel === 'PUSH' && pushConfigured);
+
+      if (!isConfigured) {
+        targetChannel = 'IN_APP';
+        finalPayload._fallback = {
+          requested_channel: channel,
+          delivery_status: 'simulated_fallback',
+          reason: `External provider for ${channel} is not configured in environment.`
+        };
+      }
+    }
+
     const notification: Notification = {
       id: crypto.randomUUID(),
       organization_id: orgId,
       user_id: userId,
       type,
-      channel: 'IN_APP',
+      channel: targetChannel,
       title,
       body,
-      payload_json: payload,
+      payload_json: finalPayload,
       sent_at: new Date().toISOString(),
       created_at: new Date().toISOString(),
     };
@@ -326,8 +350,14 @@ export class DataStore implements IDataRepository {
       const { updatedRequest, updatedRide } = RideRequestStateMachine.accept(request, ride);
       if (updatedRide.available_seats < 0) throw new Error('Check constraint violation: available_seats cannot be negative.');
 
-      this.rides.set(updatedRide.id, updatedRide);
-      this.rideRequests.set(updatedRequest.id, updatedRequest);
+      const now = new Date().toISOString();
+      const newRideVersion = (ride.version || 1) + 1;
+      const newReqVersion = (request.version || 1) + 1;
+      const rideToSave: Ride = { ...updatedRide, version: newRideVersion, updated_at: now };
+      const reqToSave: RideRequest = { ...updatedRequest, version: newReqVersion, updated_at: now };
+
+      this.rides.set(rideToSave.id, rideToSave);
+      this.rideRequests.set(reqToSave.id, reqToSave);
 
       const passengerEntry: RidePassenger = {
         id: crypto.randomUUID(),
@@ -336,17 +366,37 @@ export class DataStore implements IDataRepository {
         ride_request_id: request.id,
         passenger_id: request.passenger_id,
         seats_booked: request.requested_seats,
-        created_at: new Date().toISOString(),
+        created_at: now,
       };
       this.ridePassengers.set(passengerEntry.id, passengerEntry);
 
-      return { request: updatedRequest, ride: updatedRide };
+      void this.logAudit(
+        ride.organization_id,
+        actorId,
+        'RIDE_REQUEST',
+        request.id,
+        'STATE_TRANSITION',
+        request.status,
+        'ACCEPTED',
+        { ride_id: ride.id, seats: request.requested_seats }
+      );
+
+      void this.dispatchNotification(
+        ride.organization_id,
+        request.passenger_id,
+        'REQUEST_ACCEPTED',
+        'Ride Request Confirmed!',
+        'Your host has confirmed your seat.',
+        { ride_id: ride.id, request_id: request.id }
+      );
+
+      return { request: reqToSave, ride: rideToSave };
     } finally {
       release();
     }
   }
 
-  public async rejectRideRequest(requestId: UUID, actorId: UUID, reason?: string): Promise<{ request: RideRequest; ride: Ride }> {
+  public async rejectRideRequestWithPessimisticLock(requestId: UUID, actorId: UUID, reason?: string): Promise<{ request: RideRequest; ride: Ride }> {
     const rawReq = this.rideRequests.get(requestId);
     if (!rawReq) throw new Error('Ride request not found.');
 
@@ -363,11 +413,13 @@ export class DataStore implements IDataRepository {
       }
 
       const updatedRequest = RideRequestStateMachine.reject(request, reason);
-      this.rideRequests.set(updatedRequest.id, updatedRequest);
+      const now = new Date().toISOString();
+      const reqToSave: RideRequest = { ...updatedRequest, version: (request.version || 1) + 1, updated_at: now };
+      this.rideRequests.set(reqToSave.id, reqToSave);
 
       void this.logAudit(
         ride.organization_id, actorId, 'RIDE_REQUEST', request.id, 'STATE_TRANSITION',
-        request.status, updatedRequest.status, { rejection_reason: reason }
+        request.status, reqToSave.status, { rejection_reason: reason }
       );
 
       void this.dispatchNotification(
@@ -377,13 +429,17 @@ export class DataStore implements IDataRepository {
         { ride_id: ride.id, request_id: request.id }
       );
 
-      return { request: updatedRequest, ride };
+      return { request: reqToSave, ride };
     } finally {
       release();
     }
   }
 
-  public async cancelRideRequest(requestId: UUID, actorId: UUID, reason?: string): Promise<{ request: RideRequest; ride: Ride }> {
+  public async rejectRideRequest(requestId: UUID, actorId: UUID, reason?: string): Promise<{ request: RideRequest; ride: Ride }> {
+    return this.rejectRideRequestWithPessimisticLock(requestId, actorId, reason);
+  }
+
+  public async cancelRideRequestWithPessimisticLock(requestId: UUID, actorId: UUID, reason?: string): Promise<{ request: RideRequest; ride: Ride }> {
     const rawReq = this.rideRequests.get(requestId);
     if (!rawReq) throw new Error('Ride request not found.');
 
@@ -402,8 +458,12 @@ export class DataStore implements IDataRepository {
       const wasAccepted = request.status === 'ACCEPTED';
       const { updatedRequest, updatedRide } = RideRequestStateMachine.cancel(request, ride, reason);
 
-      this.rides.set(updatedRide.id, updatedRide);
-      this.rideRequests.set(updatedRequest.id, updatedRequest);
+      const now = new Date().toISOString();
+      const rideToSave: Ride = { ...updatedRide, version: (ride.version || 1) + 1, updated_at: now };
+      const reqToSave: RideRequest = { ...updatedRequest, version: (request.version || 1) + 1, updated_at: now };
+
+      this.rides.set(rideToSave.id, rideToSave);
+      this.rideRequests.set(reqToSave.id, reqToSave);
 
       if (wasAccepted) {
         for (const [key, p] of this.ridePassengers.entries()) {
@@ -415,7 +475,7 @@ export class DataStore implements IDataRepository {
 
       void this.logAudit(
         ride.organization_id, actorId, 'RIDE_REQUEST', request.id, 'CANCEL',
-        request.status, updatedRequest.status,
+        request.status, reqToSave.status,
         { cancellation_reason: reason, seats_restored: wasAccepted ? request.requested_seats : 0 }
       );
 
@@ -427,13 +487,17 @@ export class DataStore implements IDataRepository {
         { ride_id: ride.id, request_id: request.id }
       );
 
-      return { request: updatedRequest, ride: updatedRide };
+      return { request: reqToSave, ride: rideToSave };
     } finally {
       release();
     }
   }
 
-  public async startRide(rideId: UUID, actorId: UUID): Promise<Ride> {
+  public async cancelRideRequest(requestId: UUID, actorId: UUID, reason?: string): Promise<{ request: RideRequest; ride: Ride }> {
+    return this.cancelRideRequestWithPessimisticLock(requestId, actorId, reason);
+  }
+
+  public async startRideWithPessimisticLock(rideId: UUID, actorId: UUID): Promise<Ride> {
     const release = await this.acquireLock(`ride:${rideId}`);
     try {
       const ride = this.rides.get(rideId);
@@ -441,11 +505,13 @@ export class DataStore implements IDataRepository {
       if (ride.driver_id !== actorId) throw new Error('Unauthorized.');
 
       const updatedRide = RideStateMachine.startRide(ride);
-      this.rides.set(updatedRide.id, updatedRide);
+      const now = new Date().toISOString();
+      const rideToSave: Ride = { ...updatedRide, version: (ride.version || 1) + 1, updated_at: now };
+      this.rides.set(rideToSave.id, rideToSave);
 
       void this.logAudit(
         ride.organization_id, actorId, 'RIDE', ride.id, 'STATE_TRANSITION',
-        ride.status, updatedRide.status
+        ride.status, rideToSave.status
       );
 
       const acceptedRequests = Array.from(this.rideRequests.values()).filter(
@@ -461,13 +527,17 @@ export class DataStore implements IDataRepository {
         );
       }
 
-      return updatedRide;
+      return rideToSave;
     } finally {
       release();
     }
   }
 
-  public async completeRide(rideId: UUID, actorId: UUID): Promise<Ride> {
+  public async startRide(rideId: UUID, actorId: UUID): Promise<Ride> {
+    return this.startRideWithPessimisticLock(rideId, actorId);
+  }
+
+  public async completeRideWithPessimisticLock(rideId: UUID, actorId: UUID): Promise<Ride> {
     const release = await this.acquireLock(`ride:${rideId}`);
     try {
       const ride = this.rides.get(rideId);
@@ -475,27 +545,34 @@ export class DataStore implements IDataRepository {
       if (ride.driver_id !== actorId) throw new Error('Unauthorized.');
 
       const updatedRide = RideStateMachine.completeRide(ride);
-      this.rides.set(updatedRide.id, updatedRide);
+      const now = new Date().toISOString();
+      const rideToSave: Ride = { ...updatedRide, version: (ride.version || 1) + 1, updated_at: now };
+      this.rides.set(rideToSave.id, rideToSave);
 
       for (const req of this.rideRequests.values()) {
         if (req.ride_id === rideId && req.status === 'ACCEPTED') {
           const completedReq = RideRequestStateMachine.complete(req);
-          this.rideRequests.set(completedReq.id, completedReq);
+          const reqToSave: RideRequest = { ...completedReq, version: (req.version || 1) + 1, updated_at: now };
+          this.rideRequests.set(reqToSave.id, reqToSave);
         }
       }
 
       void this.logAudit(
         ride.organization_id, actorId, 'RIDE', ride.id, 'STATE_TRANSITION',
-        ride.status, updatedRide.status
+        ride.status, rideToSave.status
       );
 
-      return updatedRide;
+      return rideToSave;
     } finally {
       release();
     }
   }
 
-  public async cancelRide(rideId: UUID, actorId: UUID, reason: string): Promise<Ride> {
+  public async completeRide(rideId: UUID, actorId: UUID): Promise<Ride> {
+    return this.completeRideWithPessimisticLock(rideId, actorId);
+  }
+
+  public async cancelRideWithPessimisticLock(rideId: UUID, actorId: UUID, reason: string): Promise<Ride> {
     const release = await this.acquireLock(`ride:${rideId}`);
     try {
       const ride = this.rides.get(rideId);
@@ -503,12 +580,15 @@ export class DataStore implements IDataRepository {
       if (ride.driver_id !== actorId) throw new Error('Unauthorized.');
 
       const updatedRide = RideStateMachine.cancelRide(ride, reason);
-      this.rides.set(updatedRide.id, updatedRide);
+      const now = new Date().toISOString();
+      const rideToSave: Ride = { ...updatedRide, version: (ride.version || 1) + 1, updated_at: now };
+      this.rides.set(rideToSave.id, rideToSave);
 
       for (const req of this.rideRequests.values()) {
         if (req.ride_id === rideId && (req.status === 'PENDING' || req.status === 'ACCEPTED')) {
           const { updatedRequest } = RideRequestStateMachine.cancel(req, ride, `Driver cancelled trip: ${reason}`);
-          this.rideRequests.set(updatedRequest.id, updatedRequest);
+          const reqToSave: RideRequest = { ...updatedRequest, version: (req.version || 1) + 1, updated_at: now };
+          this.rideRequests.set(reqToSave.id, reqToSave);
 
           void this.dispatchNotification(
             ride.organization_id, req.passenger_id, 'RIDE_CANCELLED',
@@ -521,13 +601,17 @@ export class DataStore implements IDataRepository {
 
       void this.logAudit(
         ride.organization_id, actorId, 'RIDE', ride.id, 'CANCEL',
-        ride.status, updatedRide.status, { cancelled_reason: reason }
+        ride.status, rideToSave.status, { cancelled_reason: reason }
       );
 
-      return updatedRide;
+      return rideToSave;
     } finally {
       release();
     }
+  }
+
+  public async cancelRide(rideId: UUID, actorId: UUID, reason: string): Promise<Ride> {
+    return this.cancelRideWithPessimisticLock(rideId, actorId, reason);
   }
 
   public async activateUserWithPessimisticLock(
@@ -640,6 +724,25 @@ export class DataStore implements IDataRepository {
   ): Promise<{ ride: Ride; route: RideRoute; waypoints: RouteWaypoint[] }> {
     const release = await this.acquireLock(`ride:${ride.id}`);
     try {
+      // In-transaction validation of vehicle
+      const vehicle = this.vehicles.get(ride.vehicle_id);
+      if (!vehicle) {
+        throw new Error("Vehicle not found.");
+      }
+      if (vehicle.organization_id !== ride.organization_id) {
+        throw new Error("Tenant isolation violation: Vehicle belongs to a different organization.");
+      }
+      if (vehicle.owner_id !== ride.driver_id) {
+        throw new Error("Unauthorized: Driver is not the registered owner of this vehicle.");
+      }
+      if (vehicle.status !== "ACTIVE") {
+        throw new Error("Cannot publish ride with inactive or suspended vehicle.");
+      }
+      const maxCap = vehicle.max_passenger_capacity || Math.max(1, Number(vehicle.total_seats) - 1);
+      if (ride.total_seats_offered > maxCap) {
+        throw new Error(`Capacity exceeded: Vehicle allows maximum ${maxCap} passenger seats.`);
+      }
+
       this.rides.set(ride.id, ride);
       this.rideRoutes.set(route.id, route);
       for (const wp of waypoints) {
@@ -676,7 +779,9 @@ export class DataStore implements IDataRepository {
       if (departureMs >= Date.now()) return false;
 
       const updatedRequest = RideRequestStateMachine.expire(request);
-      this.rideRequests.set(updatedRequest.id, updatedRequest);
+      const now = new Date().toISOString();
+      const reqToSave: RideRequest = { ...updatedRequest, version: (request.version || 1) + 1, updated_at: now };
+      this.rideRequests.set(reqToSave.id, reqToSave);
 
       this.auditLogs.push({
         id: crypto.randomUUID(),
@@ -687,7 +792,7 @@ export class DataStore implements IDataRepository {
         from_state: 'PENDING',
         to_state: 'EXPIRED',
         metadata_json: { reason: 'Auto-expired: Trip departure time passed without driver approval' },
-        created_at: new Date().toISOString(),
+        created_at: now,
       });
 
       void this.dispatchNotification(
@@ -712,13 +817,16 @@ export class DataStore implements IDataRepository {
       if (!ride || ride.status !== 'SCHEDULED') return false;
 
       const updatedRide = RideStateMachine.cancelRide(ride, reason);
-      this.rides.set(updatedRide.id, updatedRide);
+      const now = new Date().toISOString();
+      const rideToSave: Ride = { ...updatedRide, version: (ride.version || 1) + 1, updated_at: now };
+      this.rides.set(rideToSave.id, rideToSave);
 
       const cancelledRequests: RideRequest[] = [];
       for (const req of this.rideRequests.values()) {
         if (req.ride_id === rideId && (req.status === 'PENDING' || req.status === 'ACCEPTED')) {
           const { updatedRequest } = RideRequestStateMachine.cancel(req, ride, reason);
-          this.rideRequests.set(updatedRequest.id, updatedRequest);
+          const reqToSave: RideRequest = { ...updatedRequest, version: (req.version || 1) + 1, updated_at: now };
+          this.rideRequests.set(reqToSave.id, reqToSave);
 
           if (req.status === 'ACCEPTED') {
             for (const [pId, p] of this.ridePassengers.entries()) {
@@ -727,7 +835,7 @@ export class DataStore implements IDataRepository {
               }
             }
           }
-          cancelledRequests.push(updatedRequest);
+          cancelledRequests.push(reqToSave);
         }
       }
 
@@ -740,7 +848,7 @@ export class DataStore implements IDataRepository {
         from_state: 'SCHEDULED',
         to_state: 'CANCELLED',
         metadata_json: { reason },
-        created_at: new Date().toISOString(),
+        created_at: now,
       });
 
       for (const req of cancelledRequests) {

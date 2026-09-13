@@ -120,7 +120,8 @@ export interface IDataRepository {
     type: Notification['type'],
     title: string,
     body: string,
-    payload?: Record<string, unknown>
+    payload?: Record<string, unknown>,
+    channel?: Notification['channel']
   ): Promise<void>;
 
   searchCorridorRides(params: {
@@ -144,28 +145,51 @@ export interface IDataRepository {
     actorId: UUID
   ): Promise<{ request: RideRequest; ride: Ride }>;
 
+  cancelRideRequestWithPessimisticLock(
+    requestId: UUID,
+    actorId: UUID,
+    reason?: string
+  ): Promise<{ request: RideRequest; ride: Ride }>;
   cancelRideRequest(
     requestId: UUID,
     actorId: UUID,
     reason?: string
   ): Promise<{ request: RideRequest; ride: Ride }>;
 
+  rejectRideRequestWithPessimisticLock(
+    requestId: UUID,
+    actorId: UUID,
+    reason?: string
+  ): Promise<{ request: RideRequest; ride: Ride }>;
   rejectRideRequest(
     requestId: UUID,
     actorId: UUID,
     reason?: string
   ): Promise<{ request: RideRequest; ride: Ride }>;
 
+  startRideWithPessimisticLock(
+    rideId: UUID,
+    actorId: UUID
+  ): Promise<Ride>;
   startRide(
     rideId: UUID,
     actorId: UUID
   ): Promise<Ride>;
 
+  completeRideWithPessimisticLock(
+    rideId: UUID,
+    actorId: UUID
+  ): Promise<Ride>;
   completeRide(
     rideId: UUID,
     actorId: UUID
   ): Promise<Ride>;
 
+  cancelRideWithPessimisticLock(
+    rideId: UUID,
+    actorId: UUID,
+    reason: string
+  ): Promise<Ride>;
   cancelRide(
     rideId: UUID,
     actorId: UUID,
@@ -225,3 +249,11 @@ export class ActivationError extends Error {
     this.name = 'ActivationError';
   }
 }
+
+export class ConcurrencyConflictError extends Error {
+  constructor(message: string = 'The resource was updated concurrently. Please retry.') {
+    super(message);
+    this.name = 'ConcurrencyConflictError';
+  }
+}
+

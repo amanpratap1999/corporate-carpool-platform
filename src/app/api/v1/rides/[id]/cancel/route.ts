@@ -29,7 +29,7 @@ export async function POST(
     const body = await req.json().catch(() => ({}));
     const reason = body.reason || 'Host cancelled trip';
 
-    const updatedRide = await store.cancelRide(id, ctx.user.id, reason);
+    const updatedRide = await store.cancelRideWithPessimisticLock(id, ctx.user.id, reason);
     return NextResponse.json({ ride: updatedRide });
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : 'Unknown error';

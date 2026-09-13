@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import crypto from 'node:crypto';
 import { requireAdmin, problemResponse } from '@/services/api-context';
 import { getRepository } from '@/services/repository-factory';
+import { rateLimiter } from '@/infrastructure/security/rate-limiter';
 
 export async function POST(req: NextRequest) {
   const pathname = req.nextUrl.pathname;
@@ -10,6 +11,19 @@ export async function POST(req: NextRequest) {
     return auth.response;
   }
   const ctx = auth.ctx;
+
+  // Rate limiting: 20 invitations per minute per admin
+  const inviteLimit = await rateLimiter.checkShared(`invite:${ctx.user.id}`, 20, 60);
+  if (!inviteLimit.allowed) {
+    return problemResponse(
+      429,
+      'Too Many Requests',
+      `Invitation rate limit exceeded. Retry in ${inviteLimit.resetSeconds}s`,
+      'ERR_RATE_LIMIT_EXCEEDED',
+      pathname,
+      { 'Retry-After': String(inviteLimit.resetSeconds) }
+    );
+  }
 
   let body: {
     email?: string;
